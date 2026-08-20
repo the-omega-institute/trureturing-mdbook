@@ -1,0 +1,31 @@
+# Generated checkouts, source projections, render output, and local caches.
+/.upstream/
+/.site-src/
+/book/
+/src/
+/__pycache__/
+/.pytest_cache/
+
+# This repository intentionally tracks only the approved source surface.
+/*
+/.*
+!/.gitignore
+!/book.toml
+!/README.md
+!/NOTICE.md
+!/LICENSE
+!/scripts/
+/scripts/*
+!/scripts/build-site.py
+!/scripts/escape_pseudo_links.py
+!/scripts/source_tree.py
+!/scripts/verify-site.py
+!/tests/
+/tests/*
+!/tests/test_build_site.py
+!/.github/
+/.github/*
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/pages.yml
+!/.github/workflows/keepalive.yml

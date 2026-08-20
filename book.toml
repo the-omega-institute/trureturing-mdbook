@@ -1,0 +1,22 @@
+[book]
+title = "trureturing Blueprint"
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "light"
+git-repository-url = "https://github.com/the-omega-institute/trureturing"
+site-url = "/trureturing-mdbook/"
+
+[output.html.search]
+enable = false
+
+[preprocessor.escape-pseudo-links]
+command = "python3 scripts/escape_pseudo_links.py"
+after = ["links"]
+before = ["katex"]
+
+[preprocessor.katex]
+after = ["links"]
+throw-on-error = true
+trust = false
