@@ -400,3 +400,24 @@ class EscapePseudoLinksTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChangelogPredicateTests(BuildSiteTests):
+    """The changelog must list only files the site actually publishes."""
+
+    def test_is_published_path_rejects_emitter_sources(self) -> None:
+        predicate = build_site.is_published_path
+        self.assertTrue(predicate(b"Blueprint/D5/S1/Foo.md"))
+        self.assertFalse(predicate(b"Blueprint/D5/S1/Foo.scribe.cs"))
+        self.assertFalse(predicate(b"docs/Foo.md"))
+        self.assertFalse(predicate(b"Blueprint/D5/S1/Foo.MD"))
+
+    def test_changelog_omits_unpublished_emitter_sources(self) -> None:
+        self.write("Blueprint/Page.md", "# Page\n\nBody.\n")
+        self.write("Blueprint/Page.scribe.cs", "// emitter source\n")
+        sha = self.commit("add page and emitter", "2026-07-03T09:00:00+00:00")
+
+        changelog = build_site.build_changelog(self.upstream, sha)
+
+        self.assertIn("Page.md", changelog)
+        self.assertNotIn("scribe.cs", changelog)

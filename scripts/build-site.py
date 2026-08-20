@@ -19,9 +19,17 @@ from pathlib import Path
 from urllib.parse import quote_from_bytes
 
 try:
-    from source_tree import SourceEntry, list_source_entries as read_source_entries
+    from source_tree import (
+        SourceEntry,
+        is_published_path,
+        list_source_entries as read_source_entries,
+    )
 except ModuleNotFoundError:
-    from scripts.source_tree import SourceEntry, list_source_entries as read_source_entries
+    from scripts.source_tree import (
+        SourceEntry,
+        is_published_path,
+        list_source_entries as read_source_entries,
+    )
 
 
 TOOL_VERSION = "1.0.0"
@@ -272,7 +280,11 @@ def changed_paths(upstream: Path, commit: Commit) -> list[bytes]:
         "--",
         "Blueprint/",
     )
-    return sorted({path for path in raw.split(b"\0") if path.startswith(b"Blueprint/")})
+    # Reuse the publication predicate: the changelog must list only files the
+    # site actually publishes. Emitter sources such as *.scribe.cs live under
+    # Blueprint/ but are never published, so listing them is noise the reader
+    # cannot follow.
+    return sorted({path for path in raw.split(b"\0") if is_published_path(path)})
 
 
 def build_changelog(upstream: Path, sha: str) -> str:

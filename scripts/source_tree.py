@@ -12,6 +12,15 @@ PUBLISHED_MODES = {b"100644", b"100755"}
 REJECTED_MODES = {b"120000", b"160000"}
 
 
+def is_published_path(path: bytes) -> bool:
+    """The single path predicate for published upstream content.
+
+    Both the tree listing and the changelog use this, so the changelog can
+    never drift from what the site actually publishes.
+    """
+    return path.startswith(b"Blueprint/") and path.endswith(b".md")
+
+
 @dataclass(frozen=True)
 class SourceEntry:
     mode: bytes
@@ -58,7 +67,7 @@ def list_source_entries(
             mode, object_type, oid = metadata.split(b" ", 2)
         except ValueError as exc:
             raise error_type("git ls-tree returned a malformed record") from exc
-        if not (path.startswith(b"Blueprint/") and path.endswith(b".md")):
+        if not is_published_path(path):
             continue
         if mode in REJECTED_MODES or mode not in PUBLISHED_MODES:
             continue
