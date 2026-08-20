@@ -70,6 +70,11 @@ jobs:
           "$TOOL_ROOT/bin/mdbook-katex" --version
           "$TOOL_ROOT/bin/pagefind_extended" --version
 
+          # mdBook spawns preprocessors (mdbook-katex) by PATH lookup, not by
+          # absolute path, so the pinned tool directory must be on PATH for
+          # every later step.
+          echo "$TOOL_ROOT/bin" >> "$GITHUB_PATH"
+
       - name: Clone immutable-history-capable upstream checkout
         shell: bash
         run: |
@@ -82,10 +87,10 @@ jobs:
         run: python3 scripts/build-site.py .upstream "$RUNNER_TEMP/trureturing-mdbook-site-src"
 
       - name: Build mdBook
-        run: 'MDBOOK_BOOK__SRC="$RUNNER_TEMP/trureturing-mdbook-site-src" "$RUNNER_TOOL_CACHE/trureturing-mdbook-tools/bin/mdbook" build --dest-dir book'
+        run: MDBOOK_BOOK__SRC="$RUNNER_TEMP/trureturing-mdbook-site-src" mdbook build --dest-dir book
 
       - name: Build Pagefind index
-        run: '"$RUNNER_TOOL_CACHE/trureturing-mdbook-tools/bin/pagefind_extended" --site book --force-language zh'
+        run: pagefind_extended --site book --force-language zh
 
       - name: Verify release artifact
         run: python3 scripts/verify-site.py .upstream "$RUNNER_TEMP/trureturing-mdbook-site-src" book
