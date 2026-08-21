@@ -287,7 +287,16 @@ def changed_paths(upstream: Path, commit: Commit) -> list[bytes]:
     return sorted({path for path in raw.split(b"\0") if is_published_path(path)})
 
 
-def build_changelog(upstream: Path, sha: str) -> str:
+def build_changelog(
+    upstream: Path, sha: str, published: frozenset[bytes] = frozenset()
+) -> str:
+    """Render the changelog.
+
+    ``published`` is the set of paths present in the current snapshot. Only those
+    are linked: a path that upstream has since deleted still belongs in the
+    history, but linking it would produce a dangling site link, which the release
+    gate rejects. Such paths stay as plain code text.
+    """
     commits = log_commits(upstream, sha)
     selected_dates: list[str] = []
     for commit in commits:
@@ -321,8 +330,13 @@ def build_changelog(upstream: Path, sha: str) -> str:
             commit_url = f"{UPSTREAM_REPOSITORY}/commit/{commit.sha}"
             path_text = markdown_text(display_path(path))
             subject = markdown_text(commit.subject)
+            if path in published:
+                rendered_path = f"[`{path_text}`]({markdown_path(path)})"
+            else:
+                # Deleted upstream since this commit; linking it would dangle.
+                rendered_path = f"`{path_text}`"
             lines.append(
-                f"- `{path_text}` · [{short_sha}]({commit_url}) · {commit.date} · {subject}"
+                f"- {rendered_path} · [{short_sha}]({commit_url}) · {commit.date} · {subject}"
             )
         if not daily.get(date):
             lines.append("- No Blueprint paths to list for this date.")
@@ -420,7 +434,10 @@ def write_projection(
     )
     (staging / "index.md").write_text(build_index(sha), encoding="utf-8")
     (staging / "changelog.md").write_text(
-        build_changelog(upstream, sha), encoding="utf-8"
+        build_changelog(
+            upstream, sha, frozenset(entry.path for entry in entries)
+        ),
+        encoding="utf-8",
     )
     for directory in sorted(directories):
         destination = staging / decode_path(nav_path(directory))

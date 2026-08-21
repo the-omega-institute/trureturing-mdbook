@@ -130,7 +130,15 @@ class BuildSiteTests(unittest.TestCase):
 
         changelog = self.output.joinpath("changelog.md").read_text(encoding="utf-8")
         section = changelog.split("## 2026-07-02", 1)[1].split("## ", 1)[0]
-        self.assertEqual(section.count("Blueprint/Guide.md"), 1)
+        # One list entry for that path on that day. Counting the raw path string
+        # would be brittle: a linked path renders it twice, as label and target.
+        guide_entries = [
+            line
+            for line in section.splitlines()
+            if line.startswith("- ") and "Blueprint/Guide.md" in line
+        ]
+        self.assertEqual(len(guide_entries), 1)
+        self.assertIn("[`Blueprint/Guide.md`](Blueprint/Guide.md)", guide_entries[0])
         self.assertIn("second same-day update", section)
         self.assertNotIn("first same-day update", section)
         self.assertIn(f"/commits/{sha}/Blueprint/", changelog)
@@ -421,3 +429,42 @@ class ChangelogPredicateTests(BuildSiteTests):
 
         self.assertIn("Page.md", changelog)
         self.assertNotIn("scribe.cs", changelog)
+
+
+class ChangelogLinkTests(BuildSiteTests):
+    """Changelog paths link to the site, but only when the page still exists."""
+
+    def test_present_path_is_linked_and_deleted_path_is_not(self) -> None:
+        self.write("Blueprint/Kept.md", "# Kept\n\nBody.\n")
+        self.write("Blueprint/Gone.md", "# Gone\n\nBody.\n")
+        self.commit("add both pages", "2026-07-04T09:00:00+00:00")
+
+        (self.upstream / "Blueprint" / "Gone.md").unlink()
+        sha = self.commit("delete one page", "2026-07-05T09:00:00+00:00")
+
+        published = frozenset(
+            entry.path
+            for entry in build_site.read_source_entries(
+                self.upstream, sha, build_site.BuildError
+            )
+        )
+        changelog = build_site.build_changelog(self.upstream, sha, published)
+
+        # Still present: linked into the site.
+        self.assertIn("[`Blueprint/Kept.md`](Blueprint/Kept.md)", changelog)
+        # Deleted upstream: mentioned, but never linked (a link would dangle).
+        self.assertIn("`Blueprint/Gone.md`", changelog)
+        self.assertNotIn("](Blueprint/Gone.md)", changelog)
+
+    def test_changelog_links_survive_the_release_link_gate(self) -> None:
+        """The whole point of not linking deleted paths is that the gate is strict."""
+        self.write("Blueprint/Kept.md", "# Kept\n\nBody.\n")
+        self.write("Blueprint/Gone.md", "# Gone\n\nBody.\n")
+        self.commit("add both pages", "2026-07-04T09:00:00+00:00")
+        (self.upstream / "Blueprint" / "Gone.md").unlink()
+        sha = self.commit("delete one page", "2026-07-05T09:00:00+00:00")
+
+        build_site.build_site(self.upstream, self.output)
+        changelog = (self.output / "changelog.md").read_text(encoding="utf-8")
+        self.assertNotIn("](Blueprint/Gone.md)", changelog)
+        self.assertIn(sha[:7], changelog)
