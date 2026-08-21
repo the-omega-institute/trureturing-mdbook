@@ -195,8 +195,8 @@ def build_summary(
     lines = [
         "# Summary",
         "",
-        "- [首页](index.md)",
-        "- [更新日志](changelog.md)",
+        "- [Home](index.md)",
+        "- [Changelog](changelog.md)",
     ]
 
     def add_directory(directory: bytes, depth: int) -> None:
@@ -231,19 +231,19 @@ def build_nav_page(
     lines = [
         f"# {label}",
         "",
-        f"上游快照 `{sha}` 中 `{display_path(directory)}/` 的导航页。",
+        f"Navigation page for `{display_path(directory)}/` at upstream snapshot `{sha}`.",
         "",
     ]
     children = direct_children(directory, directories, entries)
     if children:
-        lines.extend(["## 内容", ""])
+        lines.extend(["## Contents", ""])
         for child, is_directory in children:
             target = nav_path(child) if is_directory else child
             relative = posixpath.relpath(target, start=start)
             title = display_path(posixpath.basename(child)) if is_directory else titles[child]
             lines.append(f"- [{markdown_text(title)}]({markdown_path(relative)})")
     else:
-        lines.append("此目录在当前快照中没有可发布的 Markdown 页面。")
+        lines.append("This directory has no publishable Markdown pages in the current snapshot.")
     lines.append("")
     return "\n".join(lines)
 
@@ -306,10 +306,11 @@ def build_changelog(upstream: Path, sha: str) -> str:
             daily[commit.date].setdefault(path, commit)
 
     lines = [
-        "# 更新日志",
+        "# Changelog",
         "",
-        f"以下内容由上游快照 `{sha}` 的 first-parent 历史自动生成，展示最近 {CHANGELOG_DAYS} 个有变更的日期。",
-        "同一天内同一路径只列一次，并采用当天最近一次触及该路径的提交信息。",
+        f"Generated from the first-parent history of upstream snapshot `{sha}`, "
+        f"covering the most recent {CHANGELOG_DAYS} dates with changes.",
+        "Each path is listed once per day, using the most recent commit that touched it that day.",
         "",
     ]
     for date in selected_dates:
@@ -324,11 +325,11 @@ def build_changelog(upstream: Path, sha: str) -> str:
                 f"- `{path_text}` · [{short_sha}]({commit_url}) · {commit.date} · {subject}"
             )
         if not daily.get(date):
-            lines.append("- 此日没有可列出的 Blueprint 路径。")
+            lines.append("- No Blueprint paths to list for this date.")
         lines.append("")
 
     history_url = f"{UPSTREAM_REPOSITORY}/commits/{sha}/Blueprint/"
-    lines.extend([f"[查看截至该快照的上游完整历史]({history_url})", ""])
+    lines.extend([f"[Full upstream history up to this snapshot]({history_url})", ""])
     return "\n".join(lines)
 
 
@@ -336,13 +337,19 @@ def build_index(sha: str) -> str:
     commit_url = f"{UPSTREAM_REPOSITORY}/commit/{sha}"
     return f"""# trureturing Blueprint
 
-本站是上游 [the-omega-institute/trureturing]({UPSTREAM_REPOSITORY}) 中 `Blueprint/` Markdown 内容的自动派生投影，用于浏览与检索；数学真源始终是上游仓库，而不是本站。
+This site is an automatically derived projection of the `Blueprint/` Markdown content in
+[the-omega-institute/trureturing]({UPSTREAM_REPOSITORY}), published for browsing and search.
+The source of mathematical truth is always the upstream repository, never this site.
 
-当前内容固定取自上游提交 [`{sha}`]({commit_url})。站点计划每日自动检查并重建一次。
+The content shown here is pinned to upstream commit [`{sha}`]({commit_url}).
+The site checks for upstream changes and rebuilds once per day.
 
-本站自写生成器、配置与工作流采用 MIT License。页面展示的 Blueprint 内容由构建过程从上游取得；上游当前未声明内容许可证，本站不对该内容授予任何权利，也不进行再许可。KaTeX 与 Pagefind 资产保留各自的版权及许可声明。
+The generator, configuration and workflows in this repository are MIT licensed. The Blueprint
+content on these pages is fetched from upstream at build time; upstream declares no content
+license, so this site grants no rights to that content and does not sublicense it. KaTeX and
+Pagefind assets retain their own copyright and license notices.
 
-## 搜索
+## Search
 
 <link href="pagefind/pagefind-ui.css" rel="stylesheet">
 <div id="search"></div>

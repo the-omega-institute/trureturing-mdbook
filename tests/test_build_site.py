@@ -124,8 +124,8 @@ class BuildSiteTests(unittest.TestCase):
 
         index = self.output.joinpath("index.md").read_text(encoding="utf-8")
         self.assertIn(sha, index)
-        self.assertIn("数学真源", index)
-        self.assertIn("上游当前未声明内容许可证", index)
+        self.assertIn("source of mathematical truth is always the upstream repository", index)
+        self.assertIn("upstream declares no content", index)
         self.assertIn("pagefind/pagefind-ui.js", index)
 
         changelog = self.output.joinpath("changelog.md").read_text(encoding="utf-8")
