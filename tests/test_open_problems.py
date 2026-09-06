@@ -177,6 +177,45 @@ class OpenProblemTests(unittest.TestCase):
         with self.assertRaisesRegex(build_site.BuildError, "missing.*bibkey"):
             build_site.build_site(self.upstream, self.output)
 
+    def check_library_rejected_without_replacement(self, old: str, new: str) -> None:
+        self.fixture()
+        build_site.build_site(self.upstream, self.output)
+
+        def snapshot():
+            return {
+                path.relative_to(self.output).as_posix(): path.read_bytes()
+                for path in self.output.rglob("*") if path.is_file()
+            }
+
+        original = snapshot()
+        self.assertIn(b"0 recorded Markdown resolution markers", original["open-problems.md"])
+        self.write("Library/Words/paper2026.md", self.library().replace(old, new))
+        self.commit("malformed Library front matter", "2026-07-07T09:00:00+00:00")
+        diagnostic = "Library/Words/paper2026.md: unsupported front matter scalar"
+        with self.assertRaisesRegex(build_site.BuildError, diagnostic) as caught:
+            build_site.build_site(self.upstream, self.output)
+        self.assertIsInstance(caught.exception.__cause__, build_site.OpenProblemError)
+        self.assertEqual(snapshot(), original)
+
+        completed = subprocess.run(
+            [sys.executable, os.fspath(build_site.__file__), str(self.upstream), str(self.output)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("build-site: " + diagnostic, completed.stderr)
+        self.assertEqual(completed.stdout, "")
+        self.assertEqual(snapshot(), original)
+
+    def test_rejects_library_scalar_mapping_without_replacing_projection(self) -> None:
+        self.check_library_rejected_without_replacement(
+            "title: Example paper", "title: Example: broken",
+        )
+
+    def test_rejects_library_flow_list_without_replacing_projection(self) -> None:
+        self.check_library_rejected_without_replacement(
+            "  - D5/S1/Example", "  - [unterminated",
+        )
+
     def test_cli_fails_without_publishing_invalid_input(self) -> None:
         self.fixture(self.marker().replace("-v1 ", "-v99 "))
         completed = subprocess.run(
@@ -327,6 +366,34 @@ class OpenProblemTests(unittest.TestCase):
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
         self.assertIn("0 external problem dossiers", page)
         self.assertIn("does not establish whether a problem is still open in the world", page)
+
+
+class FrontMatterTests(unittest.TestCase):
+    def test_rejects_unsupported_scalar_syntax_in_fields_and_lists(self) -> None:
+        from scripts.open_problems import OpenProblemError, front_matter
+
+        for scalar in (
+            "", " leading", "trailing ", "Example # comment", "Example: broken",
+            *(prefix + "value" for prefix in "\"'[{&*!>|"),
+        ):
+            for line in (f"value: {scalar}", f"value:\n  - {scalar}"):
+                with self.subTest(line=line):
+                    with self.assertRaisesRegex(OpenProblemError, "front matter"):
+                        front_matter(b"Library/Words/paper2026.md", f"---\n{line}\n---\n".encode())
+
+        with self.assertRaisesRegex(OpenProblemError, "malformed front matter list"):
+            front_matter(b"note.md", b"---\nvalue: scalar\n  - item\n---\n")
+
+    def test_preserves_plain_scalar_text_in_fields_and_lists(self) -> None:
+        from scripts.open_problems import front_matter
+
+        for scalar in ("Example paper", "10.48550/arXiv.2601.12345", "D5/S1/Example", "2026", "C#"):
+            with self.subTest(scalar=scalar):
+                fields, body = front_matter(
+                    b"note.md", f"---\nscalar: {scalar}\nlist:\n  - {scalar}\n---\nbody\n".encode(),
+                )
+                self.assertEqual(fields, {"scalar": scalar, "list": [scalar]})
+                self.assertEqual(body, "body\n")
 
 
 if __name__ == "__main__":

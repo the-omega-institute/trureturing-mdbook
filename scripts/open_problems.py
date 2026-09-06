@@ -112,6 +112,12 @@ def input_blobs(upstream: Path, entries: list[SourceEntry]) -> list[tuple[bytes,
     return blobs
 
 
+def validate_plain_scalar(scalar: str, label: str) -> None:
+    if (not scalar or scalar != scalar.strip() or scalar[0] in "\"'[{&*!>|"
+            or " #" in scalar or ": " in scalar):
+        raise OpenProblemError(f"{label}: unsupported front matter scalar")
+
+
 def front_matter(path: bytes, blob: bytes) -> tuple[dict[str, str | list[str]], str]:
     label = os.fsdecode(path)
     try:
@@ -131,8 +137,9 @@ def front_matter(path: bytes, blob: bytes) -> tuple[dict[str, str | list[str]], 
         if line.startswith("  - ") and current is not None:
             value = fields[current]
             item = line[4:]
-            if not isinstance(value, list) or not item or item != item.strip():
+            if not isinstance(value, list):
                 raise OpenProblemError(f"{label}: malformed front matter list")
+            validate_plain_scalar(item, label)
             value.append(item)
             continue
         match = re.fullmatch(r"([a-z_]+):(?: (.+))?", line)
@@ -141,10 +148,8 @@ def front_matter(path: bytes, blob: bytes) -> tuple[dict[str, str | list[str]], 
         current, scalar = match.groups()
         if current in fields:
             raise OpenProblemError(f"{label}: duplicate front matter key {current}")
-        if scalar is not None and (
-            scalar != scalar.strip() or scalar[0] in "\"'[{&*!>|" or " #" in scalar
-        ):
-            raise OpenProblemError(f"{label}: unsupported front matter scalar")
+        if scalar is not None:
+            validate_plain_scalar(scalar, label)
         fields[current] = scalar if scalar is not None else []
     return fields, text[end + 5:]
 
