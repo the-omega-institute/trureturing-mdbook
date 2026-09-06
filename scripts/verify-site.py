@@ -16,8 +16,10 @@ from pathlib import Path
 from urllib.parse import unquote_to_bytes, urlsplit
 
 try:
+    from open_problems import PAGE_PATH, OpenProblemError, derive_open_problems
     from source_tree import list_source_entries
 except ModuleNotFoundError:
+    from scripts.open_problems import PAGE_PATH, OpenProblemError, derive_open_problems
     from scripts.source_tree import list_source_entries
 
 
@@ -423,13 +425,23 @@ def verify(upstream: Path, source: Path, book: Path) -> dict[str, object]:
     if provenance["file_count"] != len(expected):
         raise VerificationError("provenance file_count does not match the projected source set")
 
+    try:
+        problem_page = derive_open_problems(upstream, sha)
+    except OpenProblemError as exc:
+        raise VerificationError(str(exc)) from exc
+    problem_source = bytes_path(source, PAGE_PATH)
+    if problem_source.is_symlink() or not problem_source.is_file():
+        raise VerificationError("open-problems.md is missing or unsafe")
+    if problem_source.read_bytes() != problem_page.markdown.encode("utf-8"):
+        raise VerificationError("open-problems.md generated page mismatch")
+
     copied_provenance = book / "provenance.json"
     if not copied_provenance.is_file() or copied_provenance.read_bytes() != (
         source / "provenance.json"
     ).read_bytes():
         raise VerificationError("provenance.json is missing or changed in the site artifact")
 
-    mapped = validate_page_mapping(book, expected)
+    mapped = validate_page_mapping(book, set(expected) | {PAGE_PATH})
     all_html = html_files(book)
     if not all_html:
         raise VerificationError("the site artifact contains no HTML")
@@ -442,6 +454,8 @@ def verify(upstream: Path, source: Path, book: Path) -> dict[str, object]:
         "status": "ok",
         "upstream_sha": sha,
         "source_files": len(expected),
+        "open_problem_dossiers": problem_page.dossier_count,
+        "open_problem_markers": problem_page.marker_count,
         "mapped_pages": len(mapped),
         "html_files": len(all_html),
         "relative_resources_checked": checked_links,

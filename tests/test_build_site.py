@@ -239,6 +239,7 @@ class BuildSiteTests(unittest.TestCase):
         (book / "provenance.json").write_bytes(
             (self.output / "provenance.json").read_bytes()
         )
+        (book / "open-problems.html").write_text("<h1>External open problems</h1>\n", encoding="utf-8")
         for path in paths:
             source_path = self.output / path
             self.assertTrue(source_path.is_file(), path)
@@ -249,7 +250,7 @@ class BuildSiteTests(unittest.TestCase):
         result = verify_site.verify(self.upstream, self.output, book)
 
         self.assertEqual(result["source_files"], 3)
-        self.assertEqual(result["mapped_pages"], 3)
+        self.assertEqual(result["mapped_pages"], 4)
 
     def test_publication_predicate_preserves_all_git_path_bytes(self) -> None:
         long_name = "x" * 197 + ".md"

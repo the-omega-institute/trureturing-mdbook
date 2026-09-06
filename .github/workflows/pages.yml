@@ -26,6 +26,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Test site generator
+        run: python3 -m unittest discover -s tests -v
+
       - name: Restore pinned site tools
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
@@ -81,7 +84,7 @@ jobs:
           set -euo pipefail
           git clone --branch dev --single-branch --filter=blob:none --no-tags --sparse \
             https://github.com/the-omega-institute/trureturing.git .upstream
-          git -C .upstream sparse-checkout set Blueprint
+          git -C .upstream sparse-checkout set Blueprint Problems Library
 
       - name: Project upstream content
         run: python3 scripts/build-site.py .upstream "$RUNNER_TEMP/trureturing-mdbook-site-src"

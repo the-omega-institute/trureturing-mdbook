@@ -19,10 +19,12 @@
 !/scripts/build-site.py
 !/scripts/escape_pseudo_links.py
 !/scripts/source_tree.py
+!/scripts/open_problems.py
 !/scripts/verify-site.py
 !/tests/
 /tests/*
 !/tests/test_build_site.py
+!/tests/test_open_problems.py
 !/.github/
 /.github/*
 !/.github/workflows/
