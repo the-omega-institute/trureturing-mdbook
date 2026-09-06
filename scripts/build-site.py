@@ -19,12 +19,14 @@ from pathlib import Path
 from urllib.parse import quote_from_bytes
 
 try:
+    from open_problems import OpenProblemError, derive_open_problems
     from source_tree import (
         SourceEntry,
         is_published_path,
         list_source_entries as read_source_entries,
     )
 except ModuleNotFoundError:
+    from scripts.open_problems import OpenProblemError, derive_open_problems
     from scripts.source_tree import (
         SourceEntry,
         is_published_path,
@@ -197,6 +199,7 @@ def build_summary(
         "",
         "- [Home](index.md)",
         "- [Changelog](changelog.md)",
+        "- [External open problems](open-problems.md)",
     ]
 
     def add_directory(directory: bytes, depth: int) -> None:
@@ -376,6 +379,13 @@ window.addEventListener("DOMContentLoaded", function () {{
 """
 
 
+def build_open_problems(upstream: Path, sha: str) -> str:
+    try:
+        return derive_open_problems(upstream, sha).markdown
+    except OpenProblemError as exc:
+        raise BuildError(str(exc)) from exc
+
+
 def safe_output_path(upstream: Path, output: Path) -> Path:
     upstream = upstream.resolve()
     cwd = Path.cwd().resolve()
@@ -433,6 +443,9 @@ def write_projection(
         build_summary(entries, titles, directories), encoding="utf-8"
     )
     (staging / "index.md").write_text(build_index(sha), encoding="utf-8")
+    (staging / "open-problems.md").write_text(
+        build_open_problems(upstream, sha), encoding="utf-8"
+    )
     (staging / "changelog.md").write_text(
         build_changelog(
             upstream, sha, frozenset(entry.path for entry in entries)
