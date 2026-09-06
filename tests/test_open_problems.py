@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -177,7 +181,9 @@ class OpenProblemTests(unittest.TestCase):
         with self.assertRaisesRegex(build_site.BuildError, "missing.*bibkey"):
             build_site.build_site(self.upstream, self.output)
 
-    def check_library_rejected_without_replacement(self, old: str, new: str) -> None:
+    def check_library_rejected_without_replacement(
+        self, old: str, new: str, diagnostic: str = "unsupported front matter scalar",
+    ) -> None:
         self.fixture()
         build_site.build_site(self.upstream, self.output)
 
@@ -189,10 +195,12 @@ class OpenProblemTests(unittest.TestCase):
 
         original = snapshot()
         self.assertIn(b"0 recorded Markdown resolution markers", original["open-problems.md"])
-        self.write("Library/Words/paper2026.md", self.library().replace(old, new))
-        self.commit("malformed Library front matter", "2026-07-07T09:00:00+00:00")
-        diagnostic = "Library/Words/paper2026.md: unsupported front matter scalar"
-        with self.assertRaisesRegex(build_site.BuildError, diagnostic) as caught:
+        self.assertIn(old, self.library())
+        self.assertNotEqual(old, new)
+        self.write("Library/Words/paper2026.md", self.library().replace(old, new, 1))
+        sha = self.commit("malformed Library front matter", "2026-07-07T09:00:00+00:00")
+        diagnostic = "Library/Words/paper2026.md: " + diagnostic
+        with self.assertRaisesRegex(build_site.BuildError, re.escape(diagnostic)) as caught:
             build_site.build_site(self.upstream, self.output)
         self.assertIsInstance(caught.exception.__cause__, build_site.OpenProblemError)
         self.assertEqual(snapshot(), original)
@@ -206,6 +214,19 @@ class OpenProblemTests(unittest.TestCase):
         self.assertEqual(completed.stdout, "")
         self.assertEqual(snapshot(), original)
 
+        # Pin a separate candidate to the bad input so verification reaches the
+        # shared reader without changing the previously valid projection.
+        with tempfile.TemporaryDirectory(dir=self.root) as temporary:
+            candidate = Path(temporary) / "source"
+            shutil.copytree(self.output, candidate)
+            provenance = json.loads(original["provenance.json"])
+            provenance["upstream_sha"] = sha
+            (candidate / "provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
+            with self.assertRaisesRegex(verify_site.VerificationError, re.escape(diagnostic)) as caught:
+                verify_site.verify(self.upstream, candidate, Path(temporary) / "book")
+            self.assertIsInstance(caught.exception.__cause__, verify_site.OpenProblemError)
+        self.assertEqual(snapshot(), original)
+
     def test_rejects_library_scalar_mapping_without_replacing_projection(self) -> None:
         self.check_library_rejected_without_replacement(
             "title: Example paper", "title: Example: broken",
@@ -214,6 +235,28 @@ class OpenProblemTests(unittest.TestCase):
     def test_rejects_library_flow_list_without_replacing_projection(self) -> None:
         self.check_library_rejected_without_replacement(
             "  - D5/S1/Example", "  - [unterminated",
+        )
+
+    def test_rejects_library_empty_title_without_replacing_projection(self) -> None:
+        self.check_library_rejected_without_replacement(
+            "title: Example paper", "title:", "title must be a nonempty scalar",
+        )
+
+    def test_rejects_library_empty_strata_without_replacing_projection(self) -> None:
+        self.check_library_rejected_without_replacement(
+            "strata_touched:\n  - D5/S1/Example", "strata_touched:",
+            "strata_touched must be a nonempty block list",
+        )
+
+    def test_rejects_library_scalar_strata_without_replacing_projection(self) -> None:
+        self.check_library_rejected_without_replacement(
+            "strata_touched:\n  - D5/S1/Example", "strata_touched: D5/S1/Example",
+            "strata_touched must be a nonempty block list",
+        )
+
+    def test_rejects_library_nul_in_body_without_replacing_projection(self) -> None:
+        self.check_library_rejected_without_replacement(
+            "# Example paper", "# Example\x00paper", "forbidden YAML character U+0000",
         )
 
     def test_cli_fails_without_publishing_invalid_input(self) -> None:
@@ -387,13 +430,109 @@ class FrontMatterTests(unittest.TestCase):
     def test_preserves_plain_scalar_text_in_fields_and_lists(self) -> None:
         from scripts.open_problems import front_matter
 
-        for scalar in ("Example paper", "10.48550/arXiv.2601.12345", "D5/S1/Example", "2026", "C#"):
+        for scalar in (
+            "Example paper", "10.48550/arXiv.2601.12345", "D5/S1/Example", "2026", "C#",
+            "-word", "?word", ":word", "a:b", "embedded [brackets], {braces}",
+            "---", "...", "true", "null", "~", "caf\u00e9", "\u4e2d\u6587", "\U0001f600",
+        ):
             with self.subTest(scalar=scalar):
                 fields, body = front_matter(
                     b"note.md", f"---\nscalar: {scalar}\nlist:\n  - {scalar}\n---\nbody\n".encode(),
                 )
                 self.assertEqual(fields, {"scalar": scalar, "list": [scalar]})
                 self.assertEqual(body, "body\n")
+
+
+# Each payload gets a discoverable end-to-end test in both scalar branches.
+SCALAR_REJECTION_CASES = {
+    "flow_sequence": "[unterminated",
+    "flow_mapping": "{unterminated",
+    "mapping_separator": "Example: broken",
+    "trailing_colon": "Example:",
+    "comment_only": "#comment",
+    "inline_comment": "Example # comment",
+    "nested_sequence": "- nested",
+    "explicit_key": "? key",
+    "explicit_value": ": value",
+    "bare_sequence_indicator": "-",
+    "bare_key_indicator": "?",
+    "bare_value_indicator": ":",
+    "flow_sequence_end": "]value",
+    "flow_mapping_end": "}value",
+    "flow_comma": ",value",
+    "directive": "%value",
+    "reserved_at": "@value",
+    "reserved_backtick": "`value",
+    "single_quote": "'value'",
+    "double_quote": '"value"',
+    "anchor": "&value",
+    "alias": "*value",
+    "tag": "!value",
+    "folded_block": ">value",
+    "literal_block": "|value",
+    "tab": "Example\ttext",
+    "tab_mapping": "Example:\tbroken",
+    "tab_comment": "Example\t#comment",
+    "next_line": "Example\u0085text",
+    "line_separator": "Example\u2028text",
+    "paragraph_separator": "Example\u2029text",
+    "embedded_bom": "Example\ufefftext",
+    "leading_space": " leading",
+    "trailing_space": "trailing ",
+}
+LIBRARY_STRUCTURE_REJECTIONS = {
+    "empty_item": ("  - D5/S1/Example", "  - ", "unsupported front matter scalar"),
+    "bare_item": ("  - D5/S1/Example", "  -", "unsupported front matter syntax"),
+    "indented_item": ("  - D5/S1/Example", "   - Example", "unsupported front matter syntax"),
+    "tab_indentation": ("  - D5/S1/Example", "\t- Example", "unsupported front matter syntax"),
+    "tab_after_dash": ("  - D5/S1/Example", "  -\tExample", "unsupported front matter syntax"),
+    "list_continuation": ("  - D5/S1/Example", "  - Example\n    continuation", "unsupported front matter syntax"),
+    "scalar_continuation": ("title: Example paper", "title: Example\n  continuation", "unsupported front matter syntax"),
+    "list_after_scalar": ("title: Example paper", "title: Example\n  - extra", "malformed front matter list"),
+    "duplicate_key": ("title: Example paper", "title: Example\ntitle: Duplicate", "duplicate front matter key title"),
+    "space_only_title": ("title: Example paper", "title: ", "unsupported front matter syntax"),
+    "list_title": ("title: Example paper", "title:\n  - Example", "title must be a nonempty scalar"),
+}
+FORBIDDEN_YAML_CODEPOINTS = (
+    *range(0x09), 0x0B, 0x0C, *range(0x0E, 0x20),
+    *range(0x7F, 0x85), *range(0x86, 0xA0), 0xFFFE, 0xFFFF,
+)
+
+
+def library_rejection_test(old: str, new: str, diagnostic: str):
+    def test(self):
+        self.check_library_rejected_without_replacement(old, new, diagnostic)
+    return test
+
+
+for case_name, scalar in (
+    *SCALAR_REJECTION_CASES.items(),
+    *((f"character_u{codepoint:04x}", f"Example{chr(codepoint)}text")
+      for codepoint in FORBIDDEN_YAML_CODEPOINTS),
+):
+    diagnostic = "unsupported front matter scalar"
+    if case_name.startswith("character_u"):
+        diagnostic = "forbidden YAML character U+" + case_name.removeprefix("character_u").upper()
+    for context, old, new in (
+        ("field", "title: Example paper", f"title: {scalar}"),
+        ("list", "  - D5/S1/Example", f"  - {scalar}"),
+    ):
+        name = f"test_rejects_library_{case_name}_{context}_without_replacing_projection"
+        setattr(OpenProblemTests, name, library_rejection_test(old, new, diagnostic))
+
+for key, value in (
+    ("authors", "A. Author"), ("year", "2026"), ("claim", "An external question."),
+    ("license", "citation-only"), ("triage", "anchor"),
+):
+    for shape, replacement in (("empty", ""), ("list", "\n  - Example")):
+        name = f"test_rejects_library_{shape}_{key}_without_replacing_projection"
+        setattr(OpenProblemTests, name, library_rejection_test(
+            f"{key}: {value}", f"{key}:{replacement}", f"{key} must be a nonempty scalar",
+        ))
+
+for case_name, arguments in LIBRARY_STRUCTURE_REJECTIONS.items():
+    name = f"test_rejects_library_{case_name}_without_replacing_projection"
+    setattr(OpenProblemTests, name, library_rejection_test(*arguments))
 
 
 if __name__ == "__main__":

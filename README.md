@@ -66,6 +66,16 @@ scalar lines, and two-space block lists. Unsupported YAML syntax, missing or unk
 keys, duplicate keys, path/slug disagreement, and duplicate or out-of-order dossier
 slugs fail the build. Each bibkey must select exactly one regular Library note with
 the current closed Library key set, whose DOI agrees with the dossier's arXiv ID.
+Every Library field except `strata_touched` must be a nonempty scalar;
+`strata_touched` must be a nonempty block list of scalars. Input documents reject
+YAML-forbidden control characters, including NUL, even outside the front matter.
+The reader implements a restricted text format, not general YAML: scalar values
+must occupy one line without tabs, Unicode line breaks, embedded BOM, leading or
+trailing whitespace, comments, or mapping separators (including a final colon).
+Quoted values, tags, anchors, aliases, flow collections, block scalars, reserved
+leading indicators, and nested lists or mappings are unsupported. Punctuation
+inside block-context text such as `C#`, `a:b`, and `text [with brackets]` is retained.
+Numbers, booleans, and null spellings are literal strings with no implicit typing.
 The upcoming `arxiv_id` to `doi` migration intentionally fails with a schema-update
 diagnostic until the parser and fixtures are deliberately updated together.
 

@@ -32,6 +32,8 @@ LIBRARY_KEYS = {"bibkey", "authors", "year", "title", "doi", "claim",
                 "strata_touched", "license", "triage"}
 MARKER_PREFIX = "scribe-open-problem-resolution"
 MARKER_RE = re.compile(r"<!-- scribe-open-problem-resolution-v([0-9]+) (.+) -->")
+# YAML c-printable excludes these ranges; UTF-8 decoding excludes surrogates.
+FORBIDDEN_YAML_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f\ufffe\uffff]")
 
 
 class OpenProblemError(RuntimeError):
@@ -113,8 +115,10 @@ def input_blobs(upstream: Path, entries: list[SourceEntry]) -> list[tuple[bytes,
 
 
 def validate_plain_scalar(scalar: str, label: str) -> None:
-    if (not scalar or scalar != scalar.strip() or scalar[0] in "\"'[{&*!>|"
-            or " #" in scalar or ": " in scalar):
+    if (not scalar or scalar != scalar.strip() or scalar[0] in "\"'[]{},#&*!>|%@`"
+            or re.match(r"[-?:](?: |$)", scalar)
+            or any(char in scalar for char in "\t\n\r\x85\u2028\u2029\ufeff")
+            or " #" in scalar or ": " in scalar or scalar.endswith(":")):
         raise OpenProblemError(f"{label}: unsupported front matter scalar")
 
 
@@ -124,13 +128,18 @@ def front_matter(path: bytes, blob: bytes) -> tuple[dict[str, str | list[str]], 
         text = blob.decode("utf-8")
     except UnicodeError as exc:
         raise OpenProblemError(f"{label}: front matter must be UTF-8") from exc
+    forbidden = FORBIDDEN_YAML_CHAR_RE.search(text)
+    if forbidden:
+        raise OpenProblemError(
+            f"{label}: forbidden YAML character U+{ord(forbidden[0]):04X}"
+        )
     if text.startswith("\ufeff") or "\r" in text or not text.startswith("---\n"):
         raise OpenProblemError(f"{label}: needs canonical front matter (UTF-8, no BOM or CR)")
     end = text.find("\n---\n", 4)
     if end < 0:
         raise OpenProblemError(f"{label}: unterminated front matter")
     # The upstream format uses plain scalar lines and two-space block lists.
-    # Unsupported YAML syntax is rejected; no implicit YAML type coercion occurs.
+    # No tabs, folding, comments, collections within items, or YAML type coercion.
     fields: dict[str, str | list[str]] = {}
     current = None
     for line in text[4:end].split("\n"):
@@ -283,6 +292,11 @@ def derive_open_problems(upstream: Path, sha: str) -> ProblemPage:
         fields, _ = front_matter(path, blob)
         if set(fields) != LIBRARY_KEYS:
             raise OpenProblemError(f"{os.fsdecode(path)}: missing or unknown Library metadata keys")
+        for key in sorted(LIBRARY_KEYS - {"strata_touched"}):
+            required_scalar(fields, key, path)
+        strata = fields["strata_touched"]
+        if not isinstance(strata, list) or not strata:
+            raise OpenProblemError(f"{os.fsdecode(path)}: strata_touched must be a nonempty block list")
         if required_scalar(fields, "bibkey", path) != bibkey:
             raise OpenProblemError(f"{os.fsdecode(path)}: bibkey/path mismatch")
         doi = required_scalar(fields, "doi", path)
