@@ -1,13 +1,14 @@
 # trureturing-mdbook
 
-This repository projects the `Blueprint/` Markdown content of
+This repository projects the `Blueprint/`, `Problems/` and `Library/` Markdown content of
 [the-omega-institute/trureturing](https://github.com/the-omega-institute/trureturing) into an
 mdBook site and publishes it through GitHub Pages. The site is a derived artifact for browsing
 and search — it is not the source of mathematical truth. That is always the upstream repository
 and its Git history.
 
 A daily workflow captures a single commit SHA from the upstream `dev` branch, publishes only the
-regular `Blueprint/**/*.md` blobs from that tree, and derives the navigation, the home page, an
+regular `Blueprint/**/*.md`, `Problems/*.md` and `Library/**/*.md` blobs from that tree,
+and derives the navigation, the home page, an
 external open problems page, a first-parent changelog covering the last 30 dates with changes,
 and a provenance record. It then
 builds with pinned mdBook, mdbook-katex and Pagefind Extended, and deploys only after the source
@@ -19,7 +20,7 @@ Git index.
 
 ## Local build
 
-Requires Python 3, Git, mdBook 0.5.4, mdbook-katex 0.10.0 and Pagefind Extended 1.5.2:
+Requires Python 3.10 or later, Git, mdBook 0.5.4, mdbook-katex 0.10.0 and Pagefind Extended 1.5.2:
 
 ```sh
 SITE_SRC="$(mktemp -d)"
@@ -51,9 +52,11 @@ python3 -m unittest discover -s tests -v
 
 The generated root page `open-problems.md` lists every `Problems/<slug>.md` dossier,
 its research triage, its Library citation and DOI, and any matching resolution marker
-in published Blueprint Markdown. Dossiers and cited Library notes are inputs only;
-they are not copied into the site navigation or changelog. Their links point to the
-captured upstream commit. Blueprint record links point to published site pages.
+in published Blueprint Markdown. All three roots are published byte-for-byte and
+included in the existing navigation and changelog. Dossier, Library note and theorem
+links are repository-relative Markdown paths that mdBook rewrites to HTML. DOI links
+remain at `doi.org`; the snapshot commit link remains at GitHub for provenance.
+The global GitHub toolbar shortcut is disabled so it adds no external navigation.
 
 All three input trees are read with `git ls-tree` and `git cat-file` at the same
 captured SHA, including during verification. The verifier independently regenerates
@@ -80,7 +83,10 @@ inside block-context text such as `C#`, `a:b`, and `text [with brackets]` is ret
 Numbers, booleans, and null spellings are literal strings with no implicit typing.
 
 Resolution parsing recognizes standalone `scribe-open-problem-resolution-v1` HTML
-comments with exactly `problem_slug` and `resolution_kind` (`proved` or `refuted`).
+comments with exactly `problem_slug`, `declaration_gid` and `resolution_kind`
+(`proved` or `refuted`). The two-key shape is rejected; there is no compatibility
+reader. `declaration_gid` must be a canonical formal GID with a declaration selector,
+such as `D5/S1/Words/Sumfree/GreedyThreeSumfreeTwoParameter.conjecture17`.
 Any occurrence of the reserved marker prefix must have valid syntax, version, and
 payload, even in a Markdown code example. Slugs must exist in the dossier set, be
 globally unique among markers, and increase lexically within each Blueprint page;
@@ -88,17 +94,38 @@ ordering across different Blueprint pages is immaterial. Violations fail the bui
 
 These comments are records, not validated typed claims: ordinary narrative can emit
 identical bytes. The page does not consume a Describe report, establish repository
-validity, or validate Lean proofs. Marker v1 lacks a declaration GID, so the page
-names only the containing Blueprint document and source line. A future versioned
-upstream marker should carry the declaration GID before the site names a resolving
-theorem. No matching marker means this repository has no recorded resolution binding
+validity, or validate Lean proofs. The theorem GID is displayed verbatim and linked
+using the marker's containing Blueprint path, with its source line. Upstream owns
+the checks that a marker resolves uniquely to a currently frozen, theorem-like declaration.
+No matching marker means this repository has no recorded resolution binding
 in that Markdown snapshot; it says nothing about whether the problem is still open
 in the world or was resolved externally.
+
+"Frozen in repository" is the committer date (`YYYY-MM-DD`) of the first commit
+adding the module's frozen state file, reachable from the captured snapshot. It is
+neither a world-resolution date nor the date the binding was recorded. The module
+path comes from the containing Blueprint page: `Blueprint/D5/X/Y.md` maps to
+`Golden/Frozen/state/D5/X/Y.lean.json`. This follows the segment-preserving Lean,
+Scribe and Markdown address invariant in upstream's
+[repository specification, sections 2.3 and A2](https://github.com/the-omega-institute/trureturing/blob/5c1f71b3b34d4946698510e141193aa32d0b8a5d/docs/develop/spec/golden-ledger-repo-spec.md).
+No path is inferred from the declaration GID. The lookup is:
+
+```sh
+git log --diff-filter=A --format=%cs --reverse --no-renames "$SHA" -- \
+  ':(literal)Golden/Frozen/state/D5/X/Y.lean.json'
+```
+
+The first output line supplies the date, including if the file was later deleted
+and re-added. Missing history, Git failures and malformed dates fail the build.
+The workflow's non-shallow `--filter=blob:none --sparse` clone retains this history
+even with only `Blueprint Problems Library` checked out; `Golden/` need not be
+materialized. The same publication predicate selects source blobs, changelog paths
+and the files whose bytes the verifier checks.
 
 ## License boundary
 
 The MIT License in [LICENSE](LICENSE) covers **only the generator, configuration and workflows
-written in this repository**. The Blueprint content shown on the built pages is fetched from
+written in this repository**. The upstream content shown on the built pages is fetched from
 upstream at build time. Upstream currently declares no content license, so this repository grants
 no rights to that content and does not sublicense it. KaTeX, Pagefind and their generated assets
 remain under their own licenses and notices. See [NOTICE.md](NOTICE.md) for the full statement.

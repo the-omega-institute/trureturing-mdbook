@@ -12,6 +12,7 @@ import re
 import string
 import subprocess
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from urllib.parse import quote_from_bytes
 
@@ -54,6 +55,7 @@ class Problem:
 @dataclass(frozen=True)
 class Resolution:
     kind: str
+    declaration_gid: str
     path: bytes
     line: int
 
@@ -243,13 +245,16 @@ def parse_markers(blobs: list[tuple[bytes, bytes]], slugs: set[str]) -> dict[str
                 raise OpenProblemError(f"{label} has malformed JSON") from exc
             if not isinstance(record, dict):
                 raise OpenProblemError(f"{label} payload must be a JSON object")
-            if set(record) != {"problem_slug", "resolution_kind"}:
+            if set(record) != {"problem_slug", "declaration_gid", "resolution_kind"}:
                 raise OpenProblemError(f"{label} has missing or unknown keys")
             slug, kind = record["problem_slug"], record["resolution_kind"]
+            gid = record["declaration_gid"]
             if not isinstance(slug, str) or not SLUG_RE.fullmatch(slug):
                 raise OpenProblemError(f"{label} has an invalid problem slug")
             if not isinstance(kind, str) or kind not in {"proved", "refuted"}:
                 raise OpenProblemError(f"{label} has an invalid resolution kind")
+            if not isinstance(gid, str) or not GID_RE.fullmatch(gid) or "." not in gid:
+                raise OpenProblemError(f"{label} has an invalid declaration GID")
             if slug not in slugs:
                 raise OpenProblemError(f"{label} references unknown problem slug {slug}")
             if slug in resolutions:
@@ -257,8 +262,29 @@ def parse_markers(blobs: list[tuple[bytes, bytes]], slugs: set[str]) -> dict[str
             if slug <= previous:
                 raise OpenProblemError(f"{label} has out-of-order resolution slug {slug}")
             previous = slug
-            resolutions[slug] = Resolution(kind, path, number)
+            resolutions[slug] = Resolution(kind, gid, path, number)
     return resolutions
+
+
+def frozen_state_date(upstream: Path, sha: str, blueprint_path: bytes) -> str:
+    # Upstream's documented GID layout preserves module segments across .lean,
+    # Blueprint/*.scribe.cs and Blueprint/*.md. The marker container is authoritative.
+    module = blueprint_path.removeprefix(b"Blueprint/").removesuffix(b".md")
+    state_path = b"Golden/Frozen/state/" + module + b".lean.json"
+    history = git(
+        upstream, "log", "--diff-filter=A", "--format=%cs", "--reverse", "--no-renames",
+        sha, "--", ":(literal)" + os.fsdecode(state_path),
+    ).splitlines()
+    if not history:
+        raise OpenProblemError(f"no adding commit for {os.fsdecode(state_path)} at {sha}")
+    try:
+        frozen_date = history[0].decode("ascii")
+        if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", frozen_date):
+            raise ValueError("expected YYYY-MM-DD")
+        date.fromisoformat(frozen_date)
+    except (UnicodeError, ValueError) as exc:
+        raise OpenProblemError(f"invalid frozen-state commit date for {os.fsdecode(state_path)}") from exc
+    return frozen_date
 
 
 def markdown_text(text: str) -> str:
@@ -312,8 +338,13 @@ def derive_open_problems(upstream: Path, sha: str) -> ProblemPage:
                 f"{os.fsdecode(problem.path)}: DOI {problem.doi!r}"
             )
     blueprint = [entry for entry in entries
-                 if is_published_path(entry.path) and entry.mode in PUBLISHED_MODES]
+                 if entry.path.startswith(b"Blueprint/") and is_published_path(entry.path)
+                 and entry.mode in PUBLISHED_MODES]
     resolutions = parse_markers(input_blobs(upstream, blueprint), {p.slug for p in problems})
+    frozen_dates = {
+        path: frozen_state_date(upstream, sha, path)
+        for path in sorted({resolution.path for resolution in resolutions.values()})
+    }
     lines = [
         "# External open problems", "",
         f"Upstream snapshot: [`{sha}`]({UPSTREAM_REPOSITORY}/commit/{sha}).", "",
@@ -321,11 +352,12 @@ def derive_open_problems(upstream: Path, sha: str) -> ProblemPage:
         "Progress below describes recorded repository bindings. This page does not establish whether a problem is still open in the world.",
         "The records are matching Markdown comments, not validated typed claims; narrative text can produce identical comments.",
         "Repository validity, declaration identity, and Lean proofs are not checked here. Triage is the dossier's research category, not a resolution status.", "",
+        "Frozen in repository is the commit date that first recorded the theorem's module in frozen state, not the date the problem was solved in the world or the binding was recorded.", "",
     ]
     for problem in problems:
         note_path, doi = notes[problem.bibkey]
-        dossier_url = f"{UPSTREAM_REPOSITORY}/blob/{sha}/{quote_from_bytes(problem.path, safe='/')}"
-        note_url = f"{UPSTREAM_REPOSITORY}/blob/{sha}/{quote_from_bytes(note_path, safe='/')}"
+        dossier_url = quote_from_bytes(problem.path, safe="/")
+        note_url = quote_from_bytes(note_path, safe="/")
         doi_url = "https://doi.org/" + quote_from_bytes(doi.encode(), safe="/")
         lines.extend([
             f"## {markdown_text(problem.title)}", "",
@@ -339,7 +371,8 @@ def derive_open_problems(upstream: Path, sha: str) -> ProblemPage:
             target = quote_from_bytes(resolution.path, safe="/")
             lines.append(
                 f"Recorded Markdown marker: **{resolution.kind}**. "
-                f"[Blueprint record]({target}) (source line {resolution.line})."
+                f"Theorem: [`{resolution.declaration_gid}`]({target}) (source line {resolution.line}). "
+                f"Frozen in repository: **{frozen_dates[resolution.path]}**."
             )
         lines.append("")
     return ProblemPage("\n".join(lines), len(problems), len(resolutions))

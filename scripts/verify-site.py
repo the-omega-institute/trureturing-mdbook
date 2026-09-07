@@ -17,10 +17,10 @@ from urllib.parse import unquote_to_bytes, urlsplit
 
 try:
     from open_problems import PAGE_PATH, OpenProblemError, derive_open_problems
-    from source_tree import list_source_entries
+    from source_tree import is_published_path, list_source_entries
 except ModuleNotFoundError:
     from scripts.open_problems import PAGE_PATH, OpenProblemError, derive_open_problems
-    from scripts.source_tree import list_source_entries
+    from scripts.source_tree import is_published_path, list_source_entries
 
 
 SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
@@ -132,10 +132,10 @@ def blob_oid(content: bytes) -> bytes:
 
 
 def projected_source_blobs(source: Path) -> dict[bytes, bytes]:
-    blueprint = source / "Blueprint"
     return {
-        b"Blueprint/" + path: blob_oid(bytes_path(source, b"Blueprint/" + path).read_bytes())
-        for path in walk_regular_files(blueprint)
+        path: blob_oid(bytes_path(source, path).read_bytes())
+        for path in walk_regular_files(source)
+        if is_published_path(path)
     }
 
 

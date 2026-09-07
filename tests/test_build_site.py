@@ -141,7 +141,7 @@ class BuildSiteTests(unittest.TestCase):
         self.assertIn("[`Blueprint/Guide.md`](Blueprint/Guide.md)", guide_entries[0])
         self.assertIn("second same-day update", section)
         self.assertNotIn("first same-day update", section)
-        self.assertIn(f"/commits/{sha}/Blueprint/", changelog)
+        self.assertIn(f"/commits/{sha}/", changelog)
 
         on_disk = json.loads(self.output.joinpath("provenance.json").read_text())
         self.assertEqual(on_disk, provenance)
@@ -409,6 +409,73 @@ class EscapePseudoLinksTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PublicationRootsTests(unittest.TestCase):
+    setUp = BuildSiteTests.setUp
+    tearDown = BuildSiteTests.tearDown
+    git = BuildSiteTests.git
+    write = BuildSiteTests.write
+    commit = BuildSiteTests.commit
+
+    def fixture(self) -> str:
+        self.write("Blueprint/Example.md", "# Example\n")
+        self.write("Problems/alpha.md", (
+            "---\nslug: alpha\nbibkey: paper2026\ndoi: 10.46298/dmtcs.17199\n"
+            "triage: window\nmotivation_gids:\n  - D5/S1/Example\n---\n# Alpha\n"
+        ))
+        self.write("Library/Words/paper2026.md", (
+            "---\nbibkey: paper2026\nauthors: A. Author\nyear: 2026\n"
+            "title: Paper\ndoi: 10.46298/dmtcs.17199\nclaim: Question\n"
+            "strata_touched:\n  - D5/S1/Example\nlicense: citation-only\ntriage: anchor\n"
+            "---\n# Paper\n"
+        ))
+        self.write("Library/Words/Nested/context.md", "# Context\n")
+        return self.commit("publish all roots", "2026-07-06T09:00:00+00:00")
+
+    def test_publication_predicate_includes_problems_and_recursive_library_markdown(self) -> None:
+        for path in (b"Problems/alpha.md", b"Library/paper.md", b"Library/Words/Nested/paper.md"):
+            with self.subTest(path=path):
+                self.assertTrue(build_site.is_published_path(path))
+        for path in (b"Problems/nested/alpha.md", b"Library/note.txt", b"Library/note.MD",
+                     b"ProblemsElsewhere/alpha.md", b"LibraryElsewhere/note.md"):
+            with self.subTest(path=path):
+                self.assertFalse(build_site.is_published_path(path))
+
+    def test_new_roots_are_projected_navigable_and_in_changelog(self) -> None:
+        self.fixture()
+        build_site.build_site(self.upstream, self.output)
+        summary = (self.output / "SUMMARY.md").read_text(encoding="utf-8")
+        changelog = (self.output / "changelog.md").read_text(encoding="utf-8")
+        for relative in ("Problems/alpha.md", "Library/Words/paper2026.md",
+                         "Library/Words/Nested/context.md"):
+            with self.subTest(path=relative):
+                self.assertEqual((self.output / relative).read_bytes(), (self.upstream / relative).read_bytes())
+                self.assertIn(f"]({relative})", summary)
+                self.assertIn(f"]({relative})", changelog)
+        for directory, child in ((b"Problems", "../Problems/alpha.md"),
+                                 (b"Library", build_site.nav_path(b"Library/Words").decode().removeprefix("_nav/")),
+                                 (b"Library/Words", "../Library/Words/paper2026.md"),
+                                 (b"Library/Words/Nested", "../Library/Words/Nested/context.md")):
+            navigation = build_site.nav_path(directory).decode()
+            self.assertIn(f"]({navigation})", summary)
+            self.assertIn(f"]({child})", (self.output / navigation).read_text(encoding="utf-8"))
+
+    def check_blob_tampering_rejected(self, relative: str) -> None:
+        self.fixture()
+        build_site.build_site(self.upstream, self.output)
+        expected = verify_site.expected_source_blobs(self.upstream, self.git("rev-parse", "HEAD"))
+        self.assertIn(relative.encode(), expected)
+        self.assertEqual(verify_site.projected_source_blobs(self.output), expected)
+        (self.output / relative).write_bytes(b"tampered\n")
+        with self.assertRaisesRegex(verify_site.VerificationError, "projected source blob mismatch.*" + relative):
+            verify_site.verify(self.upstream, self.output, self.root / "book")
+
+    def test_problems_projected_blob_bytes_are_verified(self) -> None:
+        self.check_blob_tampering_rejected("Problems/alpha.md")
+
+    def test_library_projected_blob_bytes_are_verified(self) -> None:
+        self.check_blob_tampering_rejected("Library/Words/paper2026.md")
 
 
 class ChangelogPredicateTests(BuildSiteTests):
