@@ -346,33 +346,45 @@ def derive_open_problems(upstream: Path, sha: str) -> ProblemPage:
         for path in sorted({resolution.path for resolution in resolutions.values()})
     }
     lines = [
-        "# External open problems", "",
-        f"Upstream snapshot: [`{sha}`]({UPSTREAM_REPOSITORY}/commit/{sha}).", "",
-        f"{len(problems)} external problem dossiers; {len(resolutions)} recorded Markdown resolution markers.", "",
-        "Progress below describes recorded repository bindings. This page does not establish whether a problem is still open in the world.",
-        "The records are matching Markdown comments, not validated typed claims; narrative text can produce identical comments.",
-        "Repository validity, declaration identity, and Lean proofs are not checked here. Triage is the dossier's research category, not a resolution status.", "",
-        "Frozen in repository is the commit date that first recorded the theorem's module in frozen state, not the date the problem was solved in the world or the binding was recorded.", "",
+        "# Open problems from research papers", "",
+        f"**{len(resolutions)} of {len(problems)} solved in this repository.**", "",
+        'What "solved" means here: a frozen Lean theorem in this repository is recorded',
+        "against the problem. Nobody has machine-checked that the theorem says the same",
+        "thing as the paper, and a problem with no record here may still have been solved",
+        "by someone else.", "",
     ]
-    for problem in problems:
-        note_path, doi = notes[problem.bibkey]
-        dossier_url = quote_from_bytes(problem.path, safe="/")
-        note_url = quote_from_bytes(note_path, safe="/")
-        doi_url = "https://doi.org/" + quote_from_bytes(doi.encode(), safe="/")
-        lines.extend([
-            f"## {markdown_text(problem.title)}", "",
-            f"[`{problem.slug}`]({dossier_url}) | Triage: `{problem.triage}`", "",
-            f"Source: [{problem.bibkey}]({note_url}); [DOI]({doi_url}).", "",
-        ])
-        resolution = resolutions.get(problem.slug)
-        if resolution is None:
-            lines.append("This repository has no recorded resolution binding in this Markdown snapshot.")
-        else:
-            target = quote_from_bytes(resolution.path, safe="/")
-            lines.append(
-                f"Recorded Markdown marker: **{resolution.kind}**. "
-                f"Theorem: [`{resolution.declaration_gid}`]({target}) (source line {resolution.line}). "
-                f"Frozen in repository: **{frozen_dates[resolution.path]}**."
-            )
-        lines.append("")
+    for heading, solved, count in (
+        ("Solved", True, len(resolutions)),
+        ("Not solved here", False, len(problems) - len(resolutions)),
+    ):
+        lines.extend([f"## {heading} ({count})", ""])
+        for problem in problems:
+            if (problem.slug in resolutions) != solved:
+                continue
+            note_path, doi = notes[problem.bibkey]
+            dossier_url = quote_from_bytes(problem.path, safe="/")
+            note_url = quote_from_bytes(note_path, safe="/")
+            doi_url = "https://doi.org/" + quote_from_bytes(doi.encode(), safe="/")
+            lines.extend([f"### {markdown_text(problem.title)}", ""])
+            resolution = resolutions.get(problem.slug)
+            if resolution is not None:
+                target = quote_from_bytes(resolution.path, safe="/")
+                label = "Proved" if resolution.kind == "proved" else "Refuted"
+                declaration = resolution.declaration_gid.split(".", 1)[1]
+                lines.extend([
+                    f"**{label}.** Lean theorem [`{declaration}`]({target}), "
+                    f"frozen in this repository {frozen_dates[resolution.path]}.", "",
+                ])
+            lines.extend([
+                f"[Problem details]({dossier_url}) \u00b7 [Reading note]({note_url}) "
+                f"\u00b7 [Source paper]({doi_url})", "",
+            ])
+    lines.extend([
+        "## How this list is made", "",
+        f"Source revision: [`{sha[:8]}`]({UPSTREAM_REPOSITORY}/commit/{sha}).", "",
+        "The list is generated from problem files, reading notes, and resolution records in theorem pages at this source revision.",
+        "The records are read as text, so ordinary prose can produce one; this page does not check that a record came from the repository's own verified claim.",
+        "This page does not run the repository's checks or verify the named theorems or their Lean proofs.", "",
+        'The "frozen in this repository" date is the date of the first commit that added the theorem\'s module to the frozen record. It is not the date the problem was solved in the world or the resolution was recorded.', "",
+    ])
     return ProblemPage("\n".join(lines), len(problems), len(resolutions))

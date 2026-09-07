@@ -54,16 +54,26 @@ class OpenProblemTests(unittest.TestCase):
 
     def fixture(
         self, markers: str = "", doi: str = "10.48550/arXiv.2601.12345",
-        frozen: bool = True,
+        frozen: bool = True, frozen_date: str = "2026-07-03",
     ) -> str:
         if markers and frozen:
             self.write("Golden/Frozen/state/D5/S1/Example.lean.json", '{"statement_id":"fixture"}\n')
-            self.commit("first freeze", "2026-07-05T09:00:00+00:00")
+            self.commit("first freeze", frozen_date + "T09:00:00+00:00")
         self.write("Blueprint/D5/S1/Example.md", "# Example\n\n" + markers)
         self.write("Problems/alpha.md", self.dossier(doi=doi))
         self.write("Problems/beta.md", self.dossier("beta", "wall", doi))
         self.write("Library/Words/paper2026.md", self.library(doi))
         return self.commit("open problem fixture", "2026-07-06T09:00:00+00:00")
+
+    def mixed_fixture(self) -> str:
+        self.write("Golden/Frozen/state/D5/S1/Other.lean.json", '{"statement_id":"other"}\n')
+        self.commit("freeze other module", "2026-07-02T09:00:00+00:00")
+        self.fixture(self.marker())
+        self.write("Blueprint/D5/S1/Other.md", "# Other\n\n" + self.marker(
+            "beta", "refuted", "D5/S1/Other.counterexample",
+        ))
+        self.write("Problems/gamma.md", self.dossier("gamma", "theorem"))
+        return self.commit("proved, refuted, and unrecorded problems", "2026-07-07T09:00:00+00:00")
 
     def check_rejected(self, path: str, value: str, diagnostic: str) -> None:
         self.write(path, value)
@@ -126,38 +136,204 @@ class OpenProblemTests(unittest.TestCase):
         self.fixture(self.marker())
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        entry = page.split("## Problem alpha\n", 1)[1].split("\n## ", 1)[0]
-        self.assertIn("[`D5/S1/Example.theorem17`](Blueprint/D5/S1/Example.md)", entry)
-        self.assertIn("Frozen in repository: **2026-07-05**.", entry)
-        self.assertNotIn("github.com", entry)
+        solved = page.split("## Solved (1)\n", 1)[1].split("\n## ", 1)[0]
+        entry = solved.split("### Problem alpha\n", 1)[1].split("\n### ", 1)[0]
         self.assertIn(
-            "Frozen in repository is the commit date that first recorded the theorem's module "
-            "in frozen state, not the date the problem was solved in the world or the binding was recorded.",
-            page,
+            "**Proved.** Lean theorem [`theorem17`](Blueprint/D5/S1/Example.md), "
+            "frozen in this repository 2026-07-03.",
+            entry,
+        )
+        self.assertTrue(entry.startswith("\n**Proved.**"))
+        self.assertIn("2026-07-03.\n\n[Problem details]", entry)
+        self.assertNotIn("Recorded Markdown marker:", entry)
+
+    def test_readme_describes_declaration_name_label_and_unchanged_destination(self) -> None:
+        readme = " ".join((fixtures.ROOT / "README.md").read_text(encoding="utf-8").split())
+        self.assertIn(
+            "The theorem link displays only the declaration name (for example, `conjecture17`); "
+            "its destination is unchanged, still using the marker's containing Blueprint path",
+            readme,
         )
 
-    def test_whole_page_only_allows_snapshot_commit_github_url(self) -> None:
-        sha = self.fixture(self.marker())
+    def check_summary(self, solved: int, total: int) -> None:
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
         self.assertEqual(
-            re.findall(r"https?://github\.com/[^\s)]+", page),
-            [f"https://github.com/the-omega-institute/trureturing/commit/{sha}"],
+            page.splitlines()[:4],
+            ["# Open problems from research papers", "", f"**{solved} of {total} solved in this repository.**", ""],
+        )
+        self.assertEqual(
+            re.findall(r"^## (.+)$", page, re.MULTILINE),
+            [f"Solved ({solved})", f"Not solved here ({total - solved})", "How this list is made"],
         )
 
-    def test_dossier_and_note_links_resolve_to_written_projection_blobs(self) -> None:
+    def test_summary_counts_mixed_solved_and_open(self) -> None:
+        self.fixture(self.marker())
+        self.check_summary(1, 2)
+
+    def test_summary_counts_all_solved_including_refuted(self) -> None:
+        self.fixture(self.marker() + self.marker("beta", "refuted"))
+        self.check_summary(2, 2)
+
+    def test_summary_counts_none_solved(self) -> None:
         self.fixture()
+        self.check_summary(0, 2)
+
+    def test_summary_counts_no_dossiers(self) -> None:
+        self.write("Blueprint/D5/S1/Example.md", "# Example\n")
+        self.commit("pre-dossier repository", "2026-07-08T09:00:00+00:00")
+        self.check_summary(0, 0)
+
+    def test_solved_definition_precedes_entries(self) -> None:
+        self.fixture(self.marker())
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        for label, expected in (("`alpha`", "Problems/alpha.md"),
-                                ("paper2026", "Library/Words/paper2026.md")):
-            with self.subTest(label=label):
-                target = re.search(r"\[" + re.escape(label) + r"\]\(([^)]+)\)", page)[1]
-                self.assertEqual(urlsplit(target).scheme, "")
-                self.assertEqual(target, expected)
-                projected = self.output / os.fsdecode(unquote_to_bytes(target))
-                self.assertTrue(projected.is_file(), target)
-                self.assertEqual(projected.read_bytes(), (self.upstream / expected).read_bytes())
+        definition = (
+            'What "solved" means here: a frozen Lean theorem in this repository is recorded '
+            "against the problem. Nobody has machine-checked that the theorem says the same "
+            "thing as the paper, and a problem with no record here may still have been solved "
+            "by someone else."
+        )
+        intro, entries = page.split("\n## ", 1)
+        self.assertEqual(" ".join(intro.split("\n\n")[2].splitlines()), definition)
+        self.assertNotIn(definition, " ".join(entries.splitlines()))
+
+    def test_unsolved_entry_has_only_links_and_page_level_absence_of_record_limit(self) -> None:
+        self.fixture(self.marker())
+        build_site.build_site(self.upstream, self.output)
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        opened = page.split("## Not solved here (1)\n", 1)[1].split("\n## ", 1)[0]
+        self.assertEqual(
+            opened.strip(),
+            "### Problem beta\n\n"
+            "[Problem details](Problems/beta.md) \u00b7 [Reading note](Library/Words/paper2026.md) \u00b7 "
+            "[Source paper](https://doi.org/10.48550/arXiv.2601.12345)",
+        )
+        limitation = "a problem with no record here may still have been solved by someone else."
+        self.assertEqual(" ".join(page.splitlines()).count(limitation), 1)
+        self.assertIn(limitation, " ".join(page.split("\n## ", 1)[0].splitlines()))
+
+    def test_refuted_entry_renders_refuted_date_and_linked_theorem(self) -> None:
+        self.fixture(self.marker(kind="refuted"), frozen_date="2026-07-04")
+        build_site.build_site(self.upstream, self.output)
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        solved = page.split("## Solved (1)\n", 1)[1].split("\n## ", 1)[0]
+        entry = solved.split("### Problem alpha\n", 1)[1].split("\n### ", 1)[0]
+        self.assertIn(
+            "**Refuted.** Lean theorem [`theorem17`](Blueprint/D5/S1/Example.md), "
+            "frozen in this repository 2026-07-04.",
+            entry,
+        )
+        self.assertNotIn("**Proved", entry)
+        self.assertNotIn("**Solved", entry)
+        self.assertTrue(entry.startswith("\n**Refuted.**"))
+        self.assertIn("2026-07-04.\n\n[Problem details]", entry)
+        self.assertNotIn("Recorded Markdown marker:", entry)
+
+    def test_each_module_uses_its_own_frozen_date(self) -> None:
+        self.mixed_fixture()
+        build_site.build_site(self.upstream, self.output)
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        solved = page.split("## Solved (2)\n", 1)[1].split("\n## ", 1)[0]
+        for slug, kind, declaration, path, expected_date in (
+            ("alpha", "Proved", "theorem17", "Example", "2026-07-03"),
+            ("beta", "Refuted", "counterexample", "Other", "2026-07-02"),
+        ):
+            with self.subTest(slug=slug):
+                entry = solved.split(f"### Problem {slug}\n", 1)[1].split("\n### ", 1)[0]
+                self.assertIn(
+                    f"**{kind}.** Lean theorem [`{declaration}`](Blueprint/D5/S1/{path}.md), "
+                    f"frozen in this repository {expected_date}.", entry,
+                )
+
+    def test_sections_split_entries_and_preserve_slug_order_within_each(self) -> None:
+        self.fixture(self.marker("beta") + self.marker("beta-delta"))
+        self.write("Problems/alpha-beta.md", self.dossier("alpha-beta"))
+        self.write("Problems/beta-delta.md", self.dossier("beta-delta"))
+        self.commit("add slug prefixes in both sections", "2026-07-08T09:00:00+00:00")
+        build_site.build_site(self.upstream, self.output)
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        self.assertEqual(
+            re.findall(r"^## (.+)$", page, re.MULTILINE),
+            ["Solved (2)", "Not solved here (2)", "How this list is made"],
+        )
+        solved = page.split("## Solved (2)\n", 1)[1].split("\n## ", 1)[0]
+        opened = page.split("## Not solved here (2)\n", 1)[1].split("\n## ", 1)[0]
+        self.assertEqual(re.findall(r"^### (.+)$", solved, re.MULTILINE), ["Problem beta", "Problem beta\\-delta"])
+        self.assertEqual(re.findall(r"^### (.+)$", opened, re.MULTILINE), ["Problem alpha", "Problem alpha\\-beta"])
+        self.assertEqual(len(re.findall(r"^### ", page, re.MULTILINE)), 4)
+
+    def test_trailing_method_explains_records_and_displayed_freeze_date(self) -> None:
+        sha = self.fixture(self.marker())
+        build_site.build_site(self.upstream, self.output)
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        heading = "## How this list is made\n"
+        self.assertEqual(page.count(heading), 1)
+        content, caveats = page.split(heading)
+        self.assertNotIn("\n## ", caveats)
+        self.assertNotIn("\n### ", caveats)
+        self.assertTrue(caveats.startswith(
+            f"\nSource revision: [`{sha[:8]}`](https://github.com/the-omega-institute/trureturing/commit/{sha}).\n\n"
+        ))
+        self.assertNotIn(sha, content)
+        for sentence in (
+            "The list is generated from problem files, reading notes, and resolution records in theorem pages at this source revision.",
+            "The records are read as text, so ordinary prose can produce one; this page does not check that a record came from the repository's own verified claim.",
+            "This page does not run the repository's checks or verify the named theorems or their Lean proofs.",
+            'The "frozen in this repository" date is the date of the first commit that added the theorem\'s module to the frozen record.',
+            "It is not the date the problem was solved in the world or the resolution was recorded.",
+        ):
+            with self.subTest(sentence=sentence):
+                self.assertIn(sentence, page)
+                self.assertIn(sentence, caveats)
+                self.assertNotIn(sentence, content)
+        for removed in (
+            "below", "above", "binding", "matching Markdown comments", "validated typed claims",
+            "repository validity", "declaration identity", "triage", "research category", "Upstream snapshot",
+        ):
+            with self.subTest(removed=removed):
+                self.assertNotIn(removed.lower(), page.lower())
+
+    def test_whole_page_external_urls_are_only_source_revision_and_papers(self) -> None:
+        sha = self.mixed_fixture()
+        build_site.build_site(self.upstream, self.output)
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        targets = re.findall(r"\[[^\]\n]*\]\(([^)\n]+)\)", page)
+        external = {target for target in targets if urlsplit(target).scheme or urlsplit(target).netloc}
+        external.update(re.findall(r"(?:[A-Za-z][A-Za-z0-9+.-]*:)?//[^\s<>()]+", page))
+        self.assertEqual(
+            external,
+            {f"https://github.com/the-omega-institute/trureturing/commit/{sha}",
+             "https://doi.org/10.48550/arXiv.2601.12345"},
+        )
+        self.assertEqual(targets.count(f"https://github.com/the-omega-institute/trureturing/commit/{sha}"), 1)
+
+    def test_all_entry_navigation_links_resolve_to_written_projection_blobs(self) -> None:
+        self.mixed_fixture()
+        build_site.build_site(self.upstream, self.output)
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        for slug, theorem in (("alpha", ("theorem17", "Example")),
+                              ("beta", ("counterexample", "Other")), ("gamma", None)):
+            entry = page.split(f"### Problem {slug}\n", 1)[1].split("\n##", 1)[0]
+            expected_links = [
+                ("Problem details", f"Problems/{slug}.md"),
+                ("Reading note", "Library/Words/paper2026.md"),
+                ("Source paper", "https://doi.org/10.48550/arXiv.2601.12345"),
+            ]
+            if theorem is not None:
+                expected_links.insert(0, (f"`{theorem[0]}`", f"Blueprint/D5/S1/{theorem[1]}.md"))
+            with self.subTest(slug=slug):
+                links = re.findall(r"\[([^\]\n]*)\]\(([^)\n]+)\)", entry)
+                self.assertEqual(links, expected_links)
+            for label, target in links:
+                if label == "Source paper":
+                    continue
+                with self.subTest(slug=slug, label=label):
+                    parsed = urlsplit(target)
+                    self.assertEqual((parsed.scheme, parsed.netloc, parsed.query, parsed.fragment), ("", "", "", ""))
+                    projected = self.output / os.fsdecode(unquote_to_bytes(target))
+                    self.assertTrue(projected.is_file(), target)
+                    self.assertEqual(projected.read_bytes(), (self.upstream / target).read_bytes())
 
     def test_missing_frozen_state_history_is_an_error(self) -> None:
         self.fixture(self.marker(), frozen=False)
@@ -190,7 +366,7 @@ class OpenProblemTests(unittest.TestCase):
         self.commit("refreeze", "2026-07-08T09:00:00+00:00")
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        self.assertIn("Frozen in repository: **2026-07-05**.", page)
+        self.assertIn("frozen in this repository 2026-07-03.", page)
 
     def test_frozen_history_is_limited_to_captured_snapshot(self) -> None:
         sha = self.fixture(self.marker(), frozen=False)
@@ -201,11 +377,12 @@ class OpenProblemTests(unittest.TestCase):
                 build_site.build_site(self.upstream, self.output)
 
     def test_resolution_link_and_frozen_path_use_marker_container(self) -> None:
-        self.fixture(self.marker(gid="D5/S1/DifferentName.theorem17"))
+        self.fixture(self.marker(gid="D5/S1/DifferentName.Namespace.theorem17"))
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        self.assertIn("[`D5/S1/DifferentName.theorem17`](Blueprint/D5/S1/Example.md)", page)
-        self.assertIn("Frozen in repository: **2026-07-05**.", page)
+        self.assertIn("[`Namespace.theorem17`](Blueprint/D5/S1/Example.md)", page)
+        self.assertNotIn("DifferentName", page)
+        self.assertIn("frozen in this repository 2026-07-03.", page)
 
     def test_library_marker_text_is_not_a_blueprint_resolution(self) -> None:
         self.fixture()
@@ -213,7 +390,7 @@ class OpenProblemTests(unittest.TestCase):
         self.commit("literature quoting a marker", "2026-07-07T09:00:00+00:00")
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        self.assertIn("0 recorded Markdown resolution markers", page)
+        self.assertIn("**0 of 2 solved in this repository.**", page)
 
     def test_rejects_non_object_marker_payloads(self) -> None:
         self.fixture()
@@ -390,7 +567,7 @@ class OpenProblemTests(unittest.TestCase):
             }
 
         original = snapshot()
-        self.assertIn(b"0 recorded Markdown resolution markers", original["open-problems.md"])
+        self.assertIn(b"**0 of 2 solved in this repository.**", original["open-problems.md"])
         self.assertIn(old, self.library())
         self.assertNotEqual(old, new)
         self.write("Library/Words/paper2026.md", self.library().replace(old, new, 1))
@@ -525,15 +702,15 @@ class OpenProblemTests(unittest.TestCase):
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
         self.assertIn(sha, page)
-        self.assertIn("2 external problem dossiers", page)
-        self.assertEqual(page.count("This repository has no recorded resolution binding"), 2)
-        self.assertIn("does not establish whether a problem is still open in the world", page)
-        self.assertIn("not validated typed claims", page)
-        self.assertIn("narrative text can produce identical comments", page)
+        self.assertIn("**0 of 2 solved in this repository.**", page)
+        self.assertIn(
+            "a problem with no record here may still have been solved by someone else.",
+            " ".join(page.splitlines()),
+        )
         self.assertIn("](Problems/alpha.md)", page)
         self.assertIn("](Library/Words/paper2026.md)", page)
         self.assertIn("https://doi.org/10.48550/arXiv.2601.12345", page)
-        self.assertLess(page.index("## Problem alpha"), page.index("## Problem beta"))
+        self.assertLess(page.index("### Problem alpha"), page.index("### Problem beta"))
         self.assertTrue((self.output / "Problems").is_dir())
         self.assertTrue((self.output / "Library").is_dir())
         self.assertIn(
@@ -548,29 +725,36 @@ class OpenProblemTests(unittest.TestCase):
         self.fixture(doi="10.46298/dmtcs.17199")
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        self.assertEqual(page.count("[DOI](https://doi.org/10.46298/dmtcs.17199)"), 2)
+        self.assertEqual(page.count("[Source paper](https://doi.org/10.46298/dmtcs.17199)"), 2)
 
-    def test_renders_doi_dossier_links_and_triage(self) -> None:
-        self.fixture()
+    def test_renders_readable_resource_labels_without_research_categories(self) -> None:
+        self.mixed_fixture()
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        self.assertIn("[`alpha`](Problems/alpha.md) | Triage: `window`", page)
-        self.assertIn("[`beta`](Problems/beta.md) | Triage: `wall`", page)
-        self.assertIn(
-            "Source: [paper2026](Library/Words/paper2026.md); "
-            "[DOI](https://doi.org/10.48550/arXiv.2601.12345).",
-            page,
-        )
+        for slug in ("alpha", "beta", "gamma"):
+            with self.subTest(slug=slug):
+                self.assertIn(
+                    f"[Problem details](Problems/{slug}.md) \u00b7 [Reading note](Library/Words/paper2026.md) \u00b7 "
+                    "[Source paper](https://doi.org/10.48550/arXiv.2601.12345)",
+                    page,
+                )
+        for removed in ("triage", "research category", "`window`", "`wall`", "`theorem`"):
+            with self.subTest(removed=removed):
+                self.assertNotIn(removed, page.lower())
 
-    def test_lists_proved_and_refuted_markers_as_unvalidated_records(self) -> None:
+    def test_lists_proved_and_refuted_records_with_solved_scope(self) -> None:
         self.fixture(self.marker() + "\n" + self.marker("beta", "refuted"))
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        self.assertIn("Recorded Markdown marker: **proved**", page)
-        self.assertIn("Recorded Markdown marker: **refuted**", page)
+        self.assertIn("**Proved.** Lean theorem", page)
+        self.assertIn("**Refuted.** Lean theorem", page)
         self.assertEqual(page.count("](Blueprint/D5/S1/Example.md)"), 2)
-        self.assertNotIn("This repository has no recorded resolution binding", page)
-        self.assertIn("not validated typed claims", page)
+        self.assertIn("**2 of 2 solved in this repository.**", page)
+        self.assertIn("Nobody has machine-checked that the theorem says the same thing as the paper", " ".join(page.splitlines()))
+        for slug in ("alpha", "beta"):
+            with self.subTest(slug=slug):
+                entry = page.split(f"### Problem {slug}\n", 1)[1].split("\n##", 1)[0]
+                self.assertIn("frozen in this repository 2026-07-03.", entry)
 
     def test_uses_captured_sha_despite_new_head_and_dirty_inputs(self) -> None:
         sha = self.fixture(self.marker())
@@ -587,7 +771,7 @@ class OpenProblemTests(unittest.TestCase):
             result = build_site.build_site(self.upstream, self.output)
         self.assertEqual(result["upstream_sha"], sha)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        self.assertIn("Recorded Markdown marker: **proved**", page)
+        self.assertIn("**Proved.** Lean theorem", page)
         self.assertIn("Problem beta", page)
         verified = verify_site.verify(self.upstream, self.output, self.mock_book())
         self.assertEqual(verified["upstream_sha"], sha)
@@ -600,9 +784,10 @@ class OpenProblemTests(unittest.TestCase):
         self.commit("add external problem", "2026-07-08T09:00:00+00:00")
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        self.assertIn("3 external problem dossiers", page)
-        self.assertIn("## Problem gamma", page)
-        self.assertIn("Triage: `theorem`", page)
+        self.assertIn("**0 of 3 solved in this repository.**", page)
+        opened = page.split("## Not solved here (3)\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("### Problem gamma\n\n[Problem details](Problems/gamma.md)", opened)
+        self.assertNotIn("`theorem`", page)
 
     def test_slug_prefixes_are_listed_in_slug_order(self) -> None:
         self.fixture()
@@ -610,17 +795,20 @@ class OpenProblemTests(unittest.TestCase):
         self.commit("add related slug", "2026-07-08T09:00:00+00:00")
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        self.assertIn("3 external problem dossiers", page)
-        self.assertLess(page.index("## Problem alpha\n"), page.index("## Problem alpha\\-beta\n"))
-        self.assertLess(page.index("## Problem alpha\\-beta\n"), page.index("## Problem beta\n"))
+        self.assertIn("**0 of 3 solved in this repository.**", page)
+        self.assertLess(page.index("### Problem alpha\n"), page.index("### Problem alpha\\-beta\n"))
+        self.assertLess(page.index("### Problem alpha\\-beta\n"), page.index("### Problem beta\n"))
 
     def test_no_dossiers_is_explicit_and_not_a_resolution_report(self) -> None:
         self.write("Blueprint/D5/S1/Example.md", "# Example\n")
         self.commit("pre-dossier repository", "2026-07-08T09:00:00+00:00")
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        self.assertIn("0 external problem dossiers", page)
-        self.assertIn("does not establish whether a problem is still open in the world", page)
+        self.assertIn("**0 of 0 solved in this repository.**", page)
+        self.assertIn(
+            "a problem with no record here may still have been solved by someone else.",
+            " ".join(page.splitlines()),
+        )
 
 
 class FrontMatterTests(unittest.TestCase):
