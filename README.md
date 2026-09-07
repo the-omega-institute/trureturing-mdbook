@@ -60,12 +60,14 @@ captured SHA, including during verification. The verifier independently regenera
 the page from those Git objects, compares its bytes, requires its HTML mapping, and
 checks its rendered links. CI runs the Python tests before building the site.
 
-The dossier parser accepts the current closed key set: `slug`, `bibkey`, `arxiv_id`,
+The dossier parser accepts the current closed key set: `slug`, `bibkey`, `doi`,
 `triage`, `motivation_gids`. Front matter must use UTF-8 without BOM or CR, plain
 scalar lines, and two-space block lists. Unsupported YAML syntax, missing or unknown
 keys, duplicate keys, path/slug disagreement, and duplicate or out-of-order dossier
 slugs fail the build. Each bibkey must select exactly one regular Library note with
-the current closed Library key set, whose DOI agrees with the dossier's arXiv ID.
+the current closed Library key set, whose DOI exactly matches the dossier's DOI,
+including case. Both DOI values must match `^10\.[0-9]{4,9}/\S+$`; journal DOIs and
+arXiv DOIs are accepted. The retired `arxiv_id` key is rejected, including alongside `doi`.
 Every Library field except `strata_touched` must be a nonempty scalar;
 `strata_touched` must be a nonempty block list of scalars. Input documents reject
 YAML-forbidden control characters, including NUL, even outside the front matter.
@@ -76,8 +78,6 @@ Quoted values, tags, anchors, aliases, flow collections, block scalars, reserved
 leading indicators, and nested lists or mappings are unsupported. Punctuation
 inside block-context text such as `C#`, `a:b`, and `text [with brackets]` is retained.
 Numbers, booleans, and null spellings are literal strings with no implicit typing.
-The upcoming `arxiv_id` to `doi` migration intentionally fails with a schema-update
-diagnostic until the parser and fixtures are deliberately updated together.
 
 Resolution parsing recognizes standalone `scribe-open-problem-resolution-v1` HTML
 comments with exactly `problem_slug` and `resolution_kind` (`proved` or `refuted`).
