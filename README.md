@@ -94,7 +94,8 @@ ordering across different Blueprint pages is immaterial. Violations fail the bui
 
 These comments are records, not validated typed claims: ordinary narrative can emit
 identical bytes. The page does not consume a Describe report, establish repository
-validity, or validate Lean proofs. The theorem GID is displayed verbatim and linked
+validity, or validate Lean proofs. The theorem link displays only the declaration name
+(for example, `conjecture17`); its destination is unchanged, still
 using the marker's containing Blueprint path, with its source line. Upstream owns
 the checks that a marker resolves uniquely to a currently frozen, theorem-like declaration.
 No matching marker means this repository has no recorded resolution binding
