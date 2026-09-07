@@ -10,15 +10,18 @@ from pathlib import Path
 
 PUBLISHED_MODES = {b"100644", b"100755"}
 REJECTED_MODES = {b"120000", b"160000"}
+PUBLISHED_ROOTS = (b"Blueprint", b"Problems", b"Library")
 
 
 def is_published_path(path: bytes) -> bool:
     """The single path predicate for published upstream content.
 
-    Both the tree listing and the changelog use this, so the changelog can
+    The tree listing, changelog and byte verifier all use this, so they can
     never drift from what the site actually publishes.
     """
-    return path.startswith(b"Blueprint/") and path.endswith(b".md")
+    root, separator, relative = path.partition(b"/")
+    return (root in PUBLISHED_ROOTS and bool(separator) and relative.endswith(b".md")
+            and (root != b"Problems" or b"/" not in relative))
 
 
 @dataclass(frozen=True)
@@ -44,7 +47,7 @@ def list_source_entries(
         "-z",
         sha,
         "--",
-        "Blueprint/",
+        *(os.fsdecode(root) + "/" for root in PUBLISHED_ROOTS),
     ]
     try:
         raw = subprocess.run(

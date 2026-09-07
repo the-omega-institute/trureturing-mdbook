@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Project the upstream Blueprint tree into an mdBook source directory."""
+"""Project published upstream Markdown into an mdBook source directory."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from urllib.parse import quote_from_bytes
 try:
     from open_problems import OpenProblemError, derive_open_problems
     from source_tree import (
+        PUBLISHED_ROOTS,
         SourceEntry,
         is_published_path,
         list_source_entries as read_source_entries,
@@ -28,6 +29,7 @@ try:
 except ModuleNotFoundError:
     from scripts.open_problems import OpenProblemError, derive_open_problems
     from scripts.source_tree import (
+        PUBLISHED_ROOTS,
         SourceEntry,
         is_published_path,
         list_source_entries as read_source_entries,
@@ -153,13 +155,11 @@ def file_title(path: bytes, content: bytes) -> str:
 
 
 def directory_set(entries: list[SourceEntry]) -> set[bytes]:
-    directories = {b"Blueprint"}
+    directories: set[bytes] = set()
     for entry in entries:
         directory = posixpath.dirname(entry.path)
-        while directory.startswith(b"Blueprint"):
+        while directory:
             directories.add(directory)
-            if directory == b"Blueprint":
-                break
             directory = posixpath.dirname(directory)
     return directories
 
@@ -216,7 +216,9 @@ def build_summary(
                     f"[{markdown_text(titles[child])}]({markdown_path(child)})"
                 )
 
-    add_directory(b"Blueprint", 0)
+    for directory in sorted(directories):
+        if not posixpath.dirname(directory):
+            add_directory(directory, 0)
     lines.append("")
     return "\n".join(lines)
 
@@ -259,7 +261,7 @@ def log_commits(upstream: Path, sha: str) -> list[Commit]:
         "--format=%H%x09%cs%x09%s",
         sha,
         "--",
-        "Blueprint/",
+        *(os.fsdecode(root) + "/" for root in PUBLISHED_ROOTS),
     )
     commits: list[Commit] = []
     for line in raw.decode("utf-8", "replace").splitlines():
@@ -281,7 +283,7 @@ def changed_paths(upstream: Path, commit: Commit) -> list[bytes]:
         "-z",
         commit.sha,
         "--",
-        "Blueprint/",
+        *(os.fsdecode(root) + "/" for root in PUBLISHED_ROOTS),
     )
     # Reuse the publication predicate: the changelog must list only files the
     # site actually publishes. Emitter sources such as *.scribe.cs live under
@@ -342,10 +344,10 @@ def build_changelog(
                 f"- {rendered_path} · [{short_sha}]({commit_url}) · {commit.date} · {subject}"
             )
         if not daily.get(date):
-            lines.append("- No Blueprint paths to list for this date.")
+            lines.append("- No published Markdown paths to list for this date.")
         lines.append("")
 
-    history_url = f"{UPSTREAM_REPOSITORY}/commits/{sha}/Blueprint/"
+    history_url = f"{UPSTREAM_REPOSITORY}/commits/{sha}/"
     lines.extend([f"[Full upstream history up to this snapshot]({history_url})", ""])
     return "\n".join(lines)
 
@@ -354,14 +356,14 @@ def build_index(sha: str) -> str:
     commit_url = f"{UPSTREAM_REPOSITORY}/commit/{sha}"
     return f"""# trureturing Blueprint
 
-This site is an automatically derived projection of the `Blueprint/` Markdown content in
+This site is an automatically derived projection of the `Blueprint/`, `Problems/` and `Library/` Markdown content in
 [the-omega-institute/trureturing]({UPSTREAM_REPOSITORY}), published for browsing and search.
 The source of mathematical truth is always the upstream repository, never this site.
 
 The content shown here is pinned to upstream commit [`{sha}`]({commit_url}).
 The site checks for upstream changes and rebuilds once per day.
 
-The generator, configuration and workflows in this repository are MIT licensed. The Blueprint
+The generator, configuration and workflows in this repository are MIT licensed. The upstream
 content on these pages is fetched from upstream at build time; upstream declares no content
 license, so this site grants no rights to that content and does not sublicense it. KaTeX and
 Pagefind assets retain their own copyright and license notices.
