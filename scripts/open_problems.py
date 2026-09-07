@@ -25,9 +25,10 @@ UPSTREAM_REPOSITORY = "https://github.com/the-omega-institute/trureturing"
 PAGE_PATH = b"open-problems.md"
 SLUG_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 BIBKEY_RE = re.compile(r"[a-z][a-z0-9]*")
+DOI_RE = re.compile(r"^10\.[0-9]{4,9}/\S+$")
 GID_RE = re.compile(r"D[0-9]+/S[0-9]+/(?:[A-Za-z_][A-Za-z0-9_]*/)*"
                     r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
-PROBLEM_KEYS = {"slug", "bibkey", "arxiv_id", "triage", "motivation_gids"}
+PROBLEM_KEYS = {"slug", "bibkey", "doi", "triage", "motivation_gids"}
 LIBRARY_KEYS = {"bibkey", "authors", "year", "title", "doi", "claim",
                 "strata_touched", "license", "triage"}
 MARKER_PREFIX = "scribe-open-problem-resolution"
@@ -45,7 +46,7 @@ class Problem:
     slug: str
     title: str
     bibkey: str
-    arxiv_id: str
+    doi: str
     triage: str
     path: bytes
 
@@ -178,8 +179,8 @@ def parse_dossiers(blobs: list[tuple[bytes, bytes]]) -> list[Problem]:
         label = os.fsdecode(path)
         if set(fields) != PROBLEM_KEYS:
             raise OpenProblemError(
-                f"{label}: unsupported problem schema; expected slug, bibkey, arxiv_id, "
-                "triage, motivation_gids (the arxiv_id to doi migration requires a parser update)"
+                f"{label}: unsupported problem schema; expected slug, bibkey, doi, "
+                "triage, motivation_gids"
             )
         slug = required_scalar(fields, "slug", path)
         if not SLUG_RE.fullmatch(slug) or path != f"Problems/{slug}.md".encode():
@@ -188,12 +189,12 @@ def parse_dossiers(blobs: list[tuple[bytes, bytes]]) -> list[Problem]:
             raise OpenProblemError(f"{label}: duplicate or out-of-order problem slug {slug}")
         previous = slug
         bibkey = required_scalar(fields, "bibkey", path)
-        arxiv_id = required_scalar(fields, "arxiv_id", path)
+        doi = required_scalar(fields, "doi", path)
         triage = required_scalar(fields, "triage", path)
         if not BIBKEY_RE.fullmatch(bibkey):
             raise OpenProblemError(f"{label}: noncanonical bibkey")
-        if not re.fullmatch(r"[0-9]{4}\.[0-9]{4,5}", arxiv_id):
-            raise OpenProblemError(f"{label}: noncanonical arxiv_id")
+        if not DOI_RE.fullmatch(doi):
+            raise OpenProblemError(f"{label}: invalid DOI")
         if triage not in {"theorem", "window", "wall"}:
             raise OpenProblemError(f"{label}: unknown triage")
         gids = fields["motivation_gids"]
@@ -203,7 +204,7 @@ def parse_dossiers(blobs: list[tuple[bytes, bytes]]) -> list[Problem]:
         titles = re.findall(r"^# (.+)$", body, re.MULTILINE)
         if len(titles) != 1 or not titles[0].strip():
             raise OpenProblemError(f"{label}: expected one nonempty problem title")
-        problems.append(Problem(slug, titles[0], bibkey, arxiv_id, triage, path))
+        problems.append(Problem(slug, titles[0], bibkey, doi, triage, path))
     return problems
 
 
@@ -300,13 +301,16 @@ def derive_open_problems(upstream: Path, sha: str) -> ProblemPage:
         if required_scalar(fields, "bibkey", path) != bibkey:
             raise OpenProblemError(f"{os.fsdecode(path)}: bibkey/path mismatch")
         doi = required_scalar(fields, "doi", path)
-        if not re.fullmatch(r"10\.[0-9]{4,9}/[^\s]+", doi):
+        if not DOI_RE.fullmatch(doi):
             raise OpenProblemError(f"{os.fsdecode(path)}: invalid DOI")
         notes[bibkey] = path, doi
     for problem in problems:
         path, doi = notes[problem.bibkey]
-        if doi.lower() != f"10.48550/arxiv.{problem.arxiv_id}":
-            raise OpenProblemError(f"{os.fsdecode(path)}: DOI disagrees with {os.fsdecode(problem.path)} arxiv_id")
+        if doi != problem.doi:
+            raise OpenProblemError(
+                f"{os.fsdecode(path)}: DOI {doi!r} disagrees with "
+                f"{os.fsdecode(problem.path)}: DOI {problem.doi!r}"
+            )
     blueprint = [entry for entry in entries
                  if is_published_path(entry.path) and entry.mode in PUBLISHED_MODES]
     resolutions = parse_markers(input_blobs(upstream, blueprint), {p.slug for p in problems})

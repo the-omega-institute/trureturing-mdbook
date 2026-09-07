@@ -24,17 +24,20 @@ class OpenProblemTests(unittest.TestCase):
     write = fixtures.BuildSiteTests.write
     commit = fixtures.BuildSiteTests.commit
 
-    def dossier(self, slug: str = "alpha", triage: str = "window") -> str:
+    def dossier(
+        self, slug: str = "alpha", triage: str = "window",
+        doi: str = "10.48550/arXiv.2601.12345",
+    ) -> str:
         return (
-            f"---\nslug: {slug}\nbibkey: paper2026\narxiv_id: 2601.12345\n"
+            f"---\nslug: {slug}\nbibkey: paper2026\ndoi: {doi}\n"
             f"triage: {triage}\nmotivation_gids:\n  - D5/S1/Example\n---\n\n"
             f"# Problem {slug}\n\nLater external resolutions have not been checked.\n"
         )
 
-    def library(self) -> str:
+    def library(self, doi: str = "10.48550/arXiv.2601.12345") -> str:
         return (
             "---\nbibkey: paper2026\nauthors: A. Author\nyear: 2026\n"
-            "title: Example paper\ndoi: 10.48550/arXiv.2601.12345\n"
+            f"title: Example paper\ndoi: {doi}\n"
             "claim: An external question.\nstrata_touched:\n  - D5/S1/Example\n"
             "license: citation-only\ntriage: anchor\n---\n\n# Example paper\n"
         )
@@ -43,11 +46,11 @@ class OpenProblemTests(unittest.TestCase):
         payload = json.dumps({"problem_slug": slug, "resolution_kind": kind})
         return f"<!-- scribe-open-problem-resolution-v1 {payload} -->\n"
 
-    def fixture(self, markers: str = "") -> str:
+    def fixture(self, markers: str = "", doi: str = "10.48550/arXiv.2601.12345") -> str:
         self.write("Blueprint/Example.md", "# Example\n\n" + markers)
-        self.write("Problems/alpha.md", self.dossier())
-        self.write("Problems/beta.md", self.dossier("beta", "wall"))
-        self.write("Library/Words/paper2026.md", self.library())
+        self.write("Problems/alpha.md", self.dossier(doi=doi))
+        self.write("Problems/beta.md", self.dossier("beta", "wall", doi))
+        self.write("Library/Words/paper2026.md", self.library(doi))
         return self.commit("open problem fixture", "2026-07-06T09:00:00+00:00")
 
     def check_rejected(self, path: str, value: str, diagnostic: str) -> None:
@@ -126,7 +129,7 @@ class OpenProblemTests(unittest.TestCase):
             original.replace("triage: window", "triage: open"),
             original.replace("triage: window", "triage: window\nunknown: true"),
             original.replace("triage: window", "triage: window\ntriage: wall"),
-            original.replace("arxiv_id: 2601.12345", "arxiv_id: bad-id"),
+            original.replace("doi: 10.48550/arXiv.2601.12345", "doi: bad-id"),
             original.replace("slug: alpha", "slug: beta"),
             original.replace("  - D5/S1/Example\n", ""),
             original.replace("  - D5/S1/Example", "  - ../escape"),
@@ -136,12 +139,57 @@ class OpenProblemTests(unittest.TestCase):
             with self.subTest(dossier=dossier):
                 self.check_rejected("Problems/alpha.md", dossier, "Problems/alpha.md")
 
-    def test_rejects_doi_migration_until_schema_is_supported(self) -> None:
+    def test_rejects_retired_arxiv_id_key(self) -> None:
         self.fixture()
         self.check_rejected(
             "Problems/alpha.md",
-            self.dossier().replace("arxiv_id: 2601.12345", "doi: 10.48550/arXiv.2601.12345"),
-            "schema.*arxiv_id.*doi",
+            self.dossier().replace("doi: 10.48550/arXiv.2601.12345", "arxiv_id: 2601.12345"),
+            "unsupported problem schema; expected slug, bibkey, doi, triage, motivation_gids",
+        )
+
+    def test_rejects_arxiv_id_alongside_doi(self) -> None:
+        self.fixture()
+        self.check_rejected(
+            "Problems/alpha.md",
+            self.dossier().replace("triage: window", "arxiv_id: 2601.12345\ntriage: window"),
+            "unsupported problem schema; expected slug, bibkey, doi, triage, motivation_gids",
+        )
+
+    def check_dossier_doi_rejected(self, doi: str) -> None:
+        from scripts.open_problems import OpenProblemError, parse_dossiers
+
+        with self.assertRaisesRegex(OpenProblemError, r"^Problems/alpha\.md: invalid DOI$"):
+            parse_dossiers([(b"Problems/alpha.md", self.dossier(doi=doi).encode())])
+
+    def test_rejects_dossier_doi_bare_arxiv_id(self) -> None:
+        self.check_dossier_doi_rejected("2305.08349")
+
+    def test_rejects_dossier_doi_arxiv_prefix(self) -> None:
+        self.check_dossier_doi_rejected("arXiv:2305.08349")
+
+    def test_rejects_dossier_doi_url_prefix(self) -> None:
+        self.check_dossier_doi_rejected("https://doi.org/10.48550/arXiv.2305.08349")
+
+    def test_rejects_dossier_doi_short_registrant(self) -> None:
+        self.check_dossier_doi_rejected("10.123/x")
+
+    def test_rejects_dossier_doi_long_registrant(self) -> None:
+        self.check_dossier_doi_rejected("10.1234567890/x")
+
+    def test_rejects_dossier_doi_empty_suffix(self) -> None:
+        self.check_dossier_doi_rejected("10.48550/")
+
+    def test_rejects_dossier_doi_inner_space(self) -> None:
+        self.check_dossier_doi_rejected("10.48550/arXiv.2305 08349")
+
+    def test_rejects_doi_case_mismatch(self) -> None:
+        self.fixture()
+        self.check_rejected(
+            "Problems/alpha.md", self.dossier(doi="10.48550/arxiv.2601.12345"),
+            re.escape(
+                "Library/Words/paper2026.md: DOI '10.48550/arXiv.2601.12345' disagrees with "
+                "Problems/alpha.md: DOI '10.48550/arxiv.2601.12345'"
+            ),
         )
 
     def test_rejects_non_utf8_dossier(self) -> None:
@@ -349,6 +397,25 @@ class OpenProblemTests(unittest.TestCase):
         changelog = (self.output / "changelog.md").read_text(encoding="utf-8")
         self.assertNotIn("Problems/", changelog)
         self.assertNotIn("Library/", changelog)
+
+    def test_accepts_non_arxiv_doi_end_to_end(self) -> None:
+        self.fixture(doi="10.46298/dmtcs.17199")
+        build_site.build_site(self.upstream, self.output)
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        self.assertEqual(page.count("[DOI](https://doi.org/10.46298/dmtcs.17199)"), 2)
+
+    def test_renders_doi_dossier_links_and_triage(self) -> None:
+        sha = self.fixture()
+        build_site.build_site(self.upstream, self.output)
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        source = f"https://github.com/the-omega-institute/trureturing/blob/{sha}"
+        self.assertIn(f"[`alpha`]({source}/Problems/alpha.md) | Triage: `window`", page)
+        self.assertIn(f"[`beta`]({source}/Problems/beta.md) | Triage: `wall`", page)
+        self.assertIn(
+            f"Source: [paper2026]({source}/Library/Words/paper2026.md); "
+            "[DOI](https://doi.org/10.48550/arXiv.2601.12345).",
+            page,
+        )
 
     def test_lists_proved_and_refuted_markers_as_unvalidated_records(self) -> None:
         self.fixture(self.marker() + "\n" + self.marker("beta", "refuted"))
