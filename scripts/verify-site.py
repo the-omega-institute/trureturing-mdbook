@@ -16,9 +16,11 @@ from pathlib import Path
 from urllib.parse import unquote_to_bytes, urlsplit
 
 try:
+    from site_freshness import generator_revision, provenance_is_usable
     from open_problems import PAGE_PATH, OpenProblemError, derive_open_problems
     from source_tree import is_published_path, list_source_entries
 except ModuleNotFoundError:
+    from scripts.site_freshness import generator_revision, provenance_is_usable
     from scripts.open_problems import PAGE_PATH, OpenProblemError, derive_open_problems
     from scripts.source_tree import is_published_path, list_source_entries
 
@@ -87,6 +89,10 @@ def load_provenance(source: Path) -> dict[str, object]:
         raise VerificationError("provenance tool_version is invalid")
     if not isinstance(built_at, str) or not built_at:
         raise VerificationError("provenance built_at is invalid")
+    if not provenance_is_usable(value):
+        raise VerificationError("provenance generator_revision or built_at is invalid")
+    if value["generator_revision"] != generator_revision():
+        raise VerificationError("provenance generator_revision does not match the build inputs")
     return value
 
 
@@ -426,7 +432,7 @@ def verify(upstream: Path, source: Path, book: Path) -> dict[str, object]:
         raise VerificationError("provenance file_count does not match the projected source set")
 
     try:
-        problem_page = derive_open_problems(upstream, sha)
+        problem_page = derive_open_problems(upstream, sha, str(provenance["built_at"]))
     except OpenProblemError as exc:
         raise VerificationError(str(exc)) from exc
     problem_source = bytes_path(source, PAGE_PATH)
@@ -453,6 +459,8 @@ def verify(upstream: Path, source: Path, book: Path) -> dict[str, object]:
     result: dict[str, object] = {
         "status": "ok",
         "upstream_sha": sha,
+        "generator_revision": provenance["generator_revision"],
+        "built_at": provenance["built_at"],
         "source_files": len(expected),
         "open_problem_dossiers": problem_page.dossier_count,
         "open_problem_markers": problem_page.marker_count,

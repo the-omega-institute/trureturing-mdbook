@@ -160,7 +160,7 @@ class OpenProblemTests(unittest.TestCase):
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
         self.assertEqual(
             page.splitlines()[:4],
-            ["# Open problems from research papers", "", f"**{solved} of {total} solved in this repository.**", ""],
+            ["# External open problems", "", f"**{solved} of {total} solved in this repository.**", ""],
         )
         self.assertEqual(
             re.findall(r"^## (.+)$", page, re.MULTILINE),
@@ -191,7 +191,7 @@ class OpenProblemTests(unittest.TestCase):
         definition = (
             'What "solved" means here: a frozen Lean theorem in this repository is recorded '
             "against the problem. Nobody has machine-checked that the theorem says the same "
-            "thing as the paper, and a problem with no record here may still have been solved "
+            "thing as the source, and a problem with no record here may still have been solved "
             "by someone else."
         )
         intro, entries = page.split("\n## ", 1)
@@ -207,7 +207,7 @@ class OpenProblemTests(unittest.TestCase):
             opened.strip(),
             "### Problem beta\n\n"
             "[Problem details](Problems/beta.md) \u00b7 [Reading note](Library/Words/paper2026.md) \u00b7 "
-            "[Source paper](https://doi.org/10.48550/arXiv.2601.12345)",
+            "[Source](https://doi.org/10.48550/arXiv.2601.12345)",
         )
         limitation = "a problem with no record here may still have been solved by someone else."
         self.assertEqual(" ".join(page.splitlines()).count(limitation), 1)
@@ -318,7 +318,7 @@ class OpenProblemTests(unittest.TestCase):
             expected_links = [
                 ("Problem details", f"Problems/{slug}.md"),
                 ("Reading note", "Library/Words/paper2026.md"),
-                ("Source paper", "https://doi.org/10.48550/arXiv.2601.12345"),
+                ("Source", "https://doi.org/10.48550/arXiv.2601.12345"),
             ]
             if theorem is not None:
                 expected_links.insert(0, (f"`{theorem[0]}`", f"Blueprint/D5/S1/{theorem[1]}.md"))
@@ -326,7 +326,7 @@ class OpenProblemTests(unittest.TestCase):
                 links = re.findall(r"\[([^\]\n]*)\]\(([^)\n]+)\)", entry)
                 self.assertEqual(links, expected_links)
             for label, target in links:
-                if label == "Source paper":
+                if label == "Source":
                     continue
                 with self.subTest(slug=slug, label=label):
                     parsed = urlsplit(target)
@@ -438,12 +438,17 @@ class OpenProblemTests(unittest.TestCase):
         self.fixture(self.marker())
         self.check_rejected("Blueprint/Other.md", self.marker(kind="refuted"), "duplicate.*slug")
 
-    def test_rejects_out_of_order_marker_slugs(self) -> None:
-        self.fixture()
-        self.check_rejected(
-            "Blueprint/D5/S1/Example.md", self.marker("beta") + self.marker("alpha"),
-            "out.of.order.*slug",
-        )
+    def test_accepts_theorem_order_but_displays_in_dossier_order(self) -> None:
+        from scripts.open_problems import parse_markers
+
+        markers = self.marker("beta", "refuted", "D5/S1/Example.counterexample") + self.marker("alpha")
+        parsed = parse_markers([(b"Blueprint/D5/S1/Example.md", markers.encode())], {"alpha", "beta"})
+        self.assertEqual((parsed["beta"].line, parsed["alpha"].line), (1, 2))
+        self.fixture(markers)
+        build_site.build_site(self.upstream, self.output)
+        page = (self.output / "open-problems.md").read_text()
+        self.assertLess(page.index("### Problem alpha"), page.index("### Problem beta"))
+        self.assertIn("**Refuted.** Lean theorem [`counterexample`]", page)
 
     def test_rejects_malformed_dossier_front_matter(self) -> None:
         self.fixture()
@@ -512,8 +517,8 @@ class OpenProblemTests(unittest.TestCase):
         self.check_rejected(
             "Problems/alpha.md", self.dossier(doi="10.48550/arxiv.2601.12345"),
             re.escape(
-                "Library/Words/paper2026.md: DOI '10.48550/arXiv.2601.12345' disagrees with "
-                "Problems/alpha.md: DOI '10.48550/arxiv.2601.12345'"
+                "Library/Words/paper2026.md: citation ('10.48550/arXiv.2601.12345', None) disagrees with "
+                "Problems/alpha.md: citation ('10.48550/arxiv.2601.12345', None)"
             ),
         )
 
@@ -618,16 +623,25 @@ class OpenProblemTests(unittest.TestCase):
             "title: Example paper", "title:", "title must be a nonempty scalar",
         )
 
-    def test_rejects_library_empty_strata_without_replacing_projection(self) -> None:
-        self.check_library_rejected_without_replacement(
-            "strata_touched:\n  - D5/S1/Example", "strata_touched:",
-            "strata_touched must be a nonempty block list",
-        )
+    def test_empty_library_strata_preserves_source_but_empty_motivation_fails(self) -> None:
+        from scripts.open_problems import OpenProblemError, parse_dossiers
+
+        self.fixture(self.marker())
+        for suffix in ("", " []"):
+            with self.subTest(suffix=suffix):
+                note = self.library().replace("strata_touched:\n  - D5/S1/Example", f"strata_touched:{suffix}")
+                self.write("Library/Words/paper2026.md", note)
+                self.commit("empty Library strata", "2026-07-08T09:00:00+00:00")
+                build_site.build_site(self.upstream, self.output)
+                self.assertEqual((self.output / "Library/Words/paper2026.md").read_bytes(), note.encode())
+                dossier = self.dossier().replace("motivation_gids:\n  - D5/S1/Example", f"motivation_gids:{suffix}")
+                with self.assertRaisesRegex(OpenProblemError, "motivation_gids"):
+                    parse_dossiers([(b"Problems/alpha.md", dossier.encode())])
 
     def test_rejects_library_scalar_strata_without_replacing_projection(self) -> None:
         self.check_library_rejected_without_replacement(
             "strata_touched:\n  - D5/S1/Example", "strata_touched: D5/S1/Example",
-            "strata_touched must be a nonempty block list",
+            "strata_touched must be a list",
         )
 
     def test_rejects_library_nul_in_body_without_replacing_projection(self) -> None:
@@ -725,7 +739,72 @@ class OpenProblemTests(unittest.TestCase):
         self.fixture(doi="10.46298/dmtcs.17199")
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        self.assertEqual(page.count("[Source paper](https://doi.org/10.46298/dmtcs.17199)"), 2)
+        self.assertEqual(page.count("[Source](https://doi.org/10.46298/dmtcs.17199)"), 2)
+
+    def test_url_only_proved_and_refuted_results_with_exact_citations(self) -> None:
+        self.fixture(self.marker("beta", "refuted") + self.marker("alpha"))
+        for slug, bibkey, url, quote in (
+            ("alpha", "oeis2026a", "https://oeis.org/A122399", '"'),
+            ("beta", "oeis2026b", "https://oeis.org/A038867", "'"),
+        ):
+            self.write(f"Problems/{slug}.md", self.dossier(slug, doi="null").replace(
+                "bibkey: paper2026", f"bibkey: {quote}{bibkey}{quote}\nurl: {quote}{url}{quote}",
+            ))
+            self.write(f"Library/Sequences/{bibkey}.md", self.library(doi="~").replace(
+                "bibkey: paper2026", f"bibkey: {bibkey}\nurl: {url}",
+            ).replace("title: Example paper", f"title: {quote}Sequence: {slug} # reference{quote}"))
+        # A DOI result remains in the same page as both URL-only results.
+        self.write("Problems/gamma.md", self.dossier("gamma"))
+        sha = self.commit("mixed current citation schema", "2026-07-08T09:00:00+00:00")
+        result = build_site.build_site(self.upstream, self.output)
+        self.assertEqual(result["upstream_sha"], sha)
+        page = (self.output / "open-problems.md").read_text()
+        for slug, kind, bibkey, url in (
+            ("alpha", "Proved", "oeis2026a", "https://oeis.org/A122399"),
+            ("beta", "Refuted", "oeis2026b", "https://oeis.org/A038867"),
+        ):
+            entry = page.split(f"### Problem {slug}\n", 1)[1].split("\n##", 1)[0]
+            self.assertIn(f"**{kind}.** Lean theorem [`theorem17`](Blueprint/D5/S1/Example.md)", entry)
+            self.assertEqual(re.findall(r"\[([^\]]+)\]\(([^\n]+?)\)", entry), [
+                ("`theorem17`", "Blueprint/D5/S1/Example.md"),
+                ("Problem details", f"Problems/{slug}.md"),
+                ("Reading note", f"Library/Sequences/{bibkey}.md"),
+                ("Source", f"<{url}>"),
+            ])
+        self.assertIn("[Source](https://doi.org/10.48550/arXiv.2601.12345)", page)
+        verified = verify_site.verify(self.upstream, self.output, self.mock_book())
+        self.assertEqual((verified["open_problem_dossiers"], verified["open_problem_markers"]), (3, 2))
+
+    def test_rejects_mismatched_url_or_citation_kind(self) -> None:
+        self.fixture()
+        self.write("Problems/alpha.md", self.dossier(doi="null").replace("triage:", "url: https://oeis.org/A122399\ntriage:"))
+        self.write("Problems/beta.md", self.dossier("beta", doi="null").replace("triage:", "url: https://oeis.org/A122399\ntriage:"))
+        for note in (
+            self.library(doi="null").replace("claim:", "url: https://oeis.org/A122398\nclaim:"),
+            self.library(doi="null").replace("claim:", "url: https://oeis.org/a122399\nclaim:"),
+            self.library(),
+        ):
+            with self.subTest(note=note):
+                self.check_rejected("Library/Words/paper2026.md", note, "citation.*disagrees")
+
+    def test_rejects_invalid_citations_in_dossier_and_selected_note(self) -> None:
+        self.fixture()
+        for metadata, diagnostic in (
+            ("doi: null", "exactly one DOI or URL"),
+            ("doi: []\nurl: https://oeis.org/A122399", "invalid DOI"),
+            ("doi: 10.48550/arXiv.2601.12345\nurl: https://oeis.org/A122399", "exactly one DOI or URL"),
+            ("doi: null\nurl: null", "url must be a nonempty scalar"),
+            ("doi: 'null'\nurl: https://oeis.org/A122399", "invalid DOI"),
+            ("url: https://oeis.org/A122399", "schema|metadata keys"),
+            ("doi: null\nurl: https://oeis.org/A122399\nurl: https://oeis.org/A122399", "duplicate"),
+            ("doi: null\nurl: https://oeis.org/A122399\nextra: value", "schema|metadata keys"),
+        ):
+            for path, original in (("Problems/alpha.md", self.dossier()),
+                                   ("Library/Words/paper2026.md", self.library())):
+                with self.subTest(metadata=metadata, path=path):
+                    self.write("Problems/alpha.md", self.dossier())
+                    self.write("Library/Words/paper2026.md", self.library())
+                    self.check_rejected(path, original.replace("doi: 10.48550/arXiv.2601.12345", metadata), diagnostic)
 
     def test_renders_readable_resource_labels_without_research_categories(self) -> None:
         self.mixed_fixture()
@@ -735,7 +814,7 @@ class OpenProblemTests(unittest.TestCase):
             with self.subTest(slug=slug):
                 self.assertIn(
                     f"[Problem details](Problems/{slug}.md) \u00b7 [Reading note](Library/Words/paper2026.md) \u00b7 "
-                    "[Source paper](https://doi.org/10.48550/arXiv.2601.12345)",
+                    "[Source](https://doi.org/10.48550/arXiv.2601.12345)",
                     page,
                 )
         for removed in ("triage", "research category", "`window`", "`wall`", "`theorem`"):
@@ -750,7 +829,7 @@ class OpenProblemTests(unittest.TestCase):
         self.assertIn("**Refuted.** Lean theorem", page)
         self.assertEqual(page.count("](Blueprint/D5/S1/Example.md)"), 2)
         self.assertIn("**2 of 2 solved in this repository.**", page)
-        self.assertIn("Nobody has machine-checked that the theorem says the same thing as the paper", " ".join(page.splitlines()))
+        self.assertIn("Nobody has machine-checked that the theorem says the same thing as the source", " ".join(page.splitlines()))
         for slug in ("alpha", "beta"):
             with self.subTest(slug=slug):
                 entry = page.split(f"### Problem {slug}\n", 1)[1].split("\n##", 1)[0]
@@ -789,6 +868,23 @@ class OpenProblemTests(unittest.TestCase):
         self.assertIn("### Problem gamma\n\n[Problem details](Problems/gamma.md)", opened)
         self.assertNotIn("`theorem`", page)
 
+    def test_dossier_without_optional_h1_uses_slug_and_still_renders_resolution(self) -> None:
+        self.fixture(self.marker())
+        self.write("Problems/alpha.md", self.dossier().replace("# Problem alpha", "## Problem"))
+        self.commit("producer dossier without H1", "2026-07-08T09:00:00+00:00")
+        build_site.build_site(self.upstream, self.output)
+        page = (self.output / "open-problems.md").read_text()
+        entry = page.split("### alpha\n", 1)[1].split("\n##", 1)[0]
+        self.assertIn("**Proved.** Lean theorem [`theorem17`](Blueprint/D5/S1/Example.md)", entry)
+        self.assertIn("[Problem details](Problems/alpha.md)", entry)
+
+    def test_rejects_empty_or_ambiguous_optional_titles(self) -> None:
+        from scripts.open_problems import OpenProblemError, parse_dossiers
+
+        for title in ("# ", "#", "# First\n\n# Second"):
+            with self.subTest(title=title), self.assertRaisesRegex(OpenProblemError, "problem title"):
+                parse_dossiers([(b"Problems/alpha.md", self.dossier().replace("# Problem alpha", title).encode())])
+
     def test_slug_prefixes_are_listed_in_slug_order(self) -> None:
         self.fixture()
         self.write("Problems/alpha-beta.md", self.dossier("alpha-beta"))
@@ -812,6 +908,52 @@ class OpenProblemTests(unittest.TestCase):
 
 
 class FrontMatterTests(unittest.TestCase):
+    def test_quoted_scalars_preserve_producer_text(self) -> None:
+        from scripts.open_problems import front_matter
+
+        for raw, expected in (
+            ('"A title: with # punctuation"', "A title: with # punctuation"),
+            ("'A title: with # punctuation'", "A title: with # punctuation"),
+            ('"A \\"quoted\\" title"', 'A "quoted" title'),
+            ('"caf\\u00e9"', "caf\u00e9"),
+            ("'Author''s question'", "Author''s question"),
+            ('"null"', "null"), ("'~'", "~"),
+        ):
+            with self.subTest(raw=raw):
+                fields, _ = front_matter(b"note.md", f"---\ntitle: {raw}\nlist:\n  - {raw}\n---\n".encode())
+                self.assertEqual(fields, {"title": expected, "list": [expected]})
+        for raw in ("null", "~", ""):
+            fields, _ = front_matter(b"note.md", f"---\ndoi:{' ' + raw if raw else ''}\n---\n".encode())
+            self.assertIsNone(fields["doi"])
+
+    def test_malformed_or_noncanonical_quoted_scalars_fail(self) -> None:
+        from scripts.open_problems import OpenProblemError, front_matter
+
+        for raw in ('"unclosed', "'unclosed", '"value" trailing', "'value' trailing",
+                    "'val'ue'", '"bad\\q"', '"line\\nfeed"', '"tab\\tvalue"',
+                    '"\\u0000"', '"\\ud800"', '"\\u2028"', '"\\ufeff"',
+                    '" leading"', "'trailing '", '""', "''"):
+            for line in (f"title: {raw}", f"strata_touched:\n  - {raw}"):
+                with self.subTest(line=line), self.assertRaises(OpenProblemError):
+                    front_matter(b"note.md", f"---\n{line}\n---\n".encode())
+
+    def test_canonical_https_citations(self) -> None:
+        from scripts.open_problems import OpenProblemError, validate_stable_url
+
+        for url in ("https://oeis.org/A122399", "https://example.org/", "https://example.org:8443/a?b=c#d",
+                    "https://example.org/a_(b)?key=%20", "https://[::1]/a"):
+            with self.subTest(url=url):
+                validate_stable_url(url, "test")
+        for url in ("http://oeis.org/A122399", "//oeis.org/A122399", "https:///A122399",
+                    "https://user:pass@oeis.org/A122399", "HTTPS://oeis.org/A122399",
+                    "https://OEIS.org/A122399", "https://oeis.org", "https://oeis.org:443/A122399",
+                    "https://oeis.org:0444/A122399", "https://oeis.org:/A122399",
+                    "https://oeis.org:70000/A122399", "https://oeis.org/a/../A122399",
+                    "https://oeis.org/%2e%2e/A122399", "https://oeis.org/A 122399",
+                    "https://oeis.org/A%xx", "https://oeis.org/A\\122399", "https://oeis.org/A\t122399"):
+            with self.subTest(url=url), self.assertRaisesRegex(OpenProblemError, "canonical HTTPS URL"):
+                validate_stable_url(url, "test")
+
     def test_rejects_unsupported_scalar_syntax_in_fields_and_lists(self) -> None:
         from scripts.open_problems import OpenProblemError, front_matter
 
@@ -833,7 +975,7 @@ class FrontMatterTests(unittest.TestCase):
         for scalar in (
             "Example paper", "10.48550/arXiv.2601.12345", "D5/S1/Example", "2026", "C#",
             "-word", "?word", ":word", "a:b", "embedded [brackets], {braces}",
-            "---", "...", "true", "null", "~", "caf\u00e9", "\u4e2d\u6587", "\U0001f600",
+            "---", "...", "true", "caf\u00e9", "\u4e2d\u6587", "\U0001f600",
         ):
             with self.subTest(scalar=scalar):
                 fields, body = front_matter(
@@ -863,8 +1005,8 @@ SCALAR_REJECTION_CASES = {
     "directive": "%value",
     "reserved_at": "@value",
     "reserved_backtick": "`value",
-    "single_quote": "'value'",
-    "double_quote": '"value"',
+    "unclosed_single_quote": "'value",
+    "unclosed_double_quote": '"value',
     "anchor": "&value",
     "alias": "*value",
     "tag": "!value",
