@@ -2,7 +2,7 @@ name: Build and deploy Pages
 
 on:
   schedule:
-    - cron: "23 3 * * *"
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
   push:
     branches:
@@ -11,15 +11,50 @@ on:
 permissions: {}
 
 concurrency:
-  group: github-pages
+  group: github-pages-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      upstream_sha: ${{ steps.freshness.outputs.upstream_sha }}
+      generator_revision: ${{ steps.freshness.outputs.generator_revision }}
+      build_required: ${{ steps.freshness.outputs.build_required }}
+    steps:
+      - name: Check out site generator
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Compare captured upstream revision with deployed provenance
+        id: freshness
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$EVENT_NAME" != schedule ]]; then
+            args+=(--force)
+          fi
+          python3 scripts/site_freshness.py "${args[@]}" --github-output "$GITHUB_OUTPUT"
+
   build:
+    needs: probe
+    if: needs.probe.outputs.build_required == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact_id }}
+    env:
+      UPSTREAM_SHA: ${{ needs.probe.outputs.upstream_sha }}
+      GENERATOR_REVISION: ${{ needs.probe.outputs.generator_revision }}
     steps:
       - name: Check out site generator
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -78,16 +113,23 @@ jobs:
           # every later step.
           echo "$TOOL_ROOT/bin" >> "$GITHUB_PATH"
 
-      - name: Clone immutable-history-capable upstream checkout
+      - name: Fetch captured upstream commit with full immutable history
         shell: bash
         run: |
           set -euo pipefail
-          git clone --branch dev --single-branch --filter=blob:none --no-tags --sparse \
-            https://github.com/the-omega-institute/trureturing.git .upstream
+          git init .upstream
+          git -C .upstream remote add origin https://github.com/the-omega-institute/trureturing.git
+          git -C .upstream fetch --filter=blob:none --no-tags origin "$UPSTREAM_SHA"
+          git -C .upstream sparse-checkout init --cone
           git -C .upstream sparse-checkout set Blueprint Problems Library
+          git -C .upstream checkout --detach "$UPSTREAM_SHA"
+          test "$(git -C .upstream rev-parse HEAD)" = "$UPSTREAM_SHA"
+          test "$(git -C .upstream rev-parse --is-shallow-repository)" = false
 
       - name: Project upstream content
-        run: python3 scripts/build-site.py .upstream "$RUNNER_TEMP/trureturing-mdbook-site-src"
+        run: |
+          python3 -c 'import os; from scripts.site_freshness import generator_revision; assert generator_revision() == os.environ["GENERATOR_REVISION"]'
+          python3 scripts/build-site.py .upstream "$RUNNER_TEMP/trureturing-mdbook-site-src" --upstream-sha "$UPSTREAM_SHA"
 
       - name: Build mdBook
         run: MDBOOK_BOOK__SRC="$RUNNER_TEMP/trureturing-mdbook-site-src" mdbook build --dest-dir book
@@ -99,12 +141,14 @@ jobs:
         run: python3 scripts/verify-site.py .upstream "$RUNNER_TEMP/trureturing-mdbook-site-src" book
 
       - name: Upload Pages artifact
+        id: artifact
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: book
 
   deploy:
     needs: build
+    if: github.ref == 'refs/heads/main' && needs.build.result == 'success' && needs.build.outputs.artifact_id != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

@@ -14,11 +14,13 @@ import subprocess
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from urllib.parse import quote_from_bytes
+from urllib.parse import quote_from_bytes, urlsplit
 
 try:
+    from site_freshness import snapshot_freshness
     from source_tree import PUBLISHED_MODES, SourceEntry, is_published_path
 except ModuleNotFoundError:
+    from scripts.site_freshness import snapshot_freshness
     from scripts.source_tree import PUBLISHED_MODES, SourceEntry, is_published_path
 
 
@@ -47,7 +49,8 @@ class Problem:
     slug: str
     title: str
     bibkey: str
-    doi: str
+    doi: str | None
+    url: str | None
     triage: str
     path: bytes
 
@@ -125,7 +128,34 @@ def validate_plain_scalar(scalar: str, label: str) -> None:
         raise OpenProblemError(f"{label}: unsupported front matter scalar")
 
 
-def front_matter(path: bytes, blob: bytes) -> tuple[dict[str, str | list[str]], str]:
+def parse_scalar(scalar: str, label: str) -> str | None:
+    if scalar in {"null", "~"}:
+        return None
+    if scalar.startswith('"'):
+        try:
+            value = json.loads(scalar)
+        except (ValueError, RecursionError) as exc:
+            raise OpenProblemError(f"{label}: unsupported front matter scalar") from exc
+    elif scalar.startswith("'"):
+        if not re.fullmatch(r"'(?:[^']|'')*'", scalar):
+            raise OpenProblemError(f"{label}: unsupported front matter scalar")
+        # The producer's YamlSubsetParser strips single quotes without unescaping.
+        value = scalar[1:-1]
+    else:
+        validate_plain_scalar(scalar, label)
+        return scalar
+    if (scalar != scalar.strip() or not isinstance(value, str) or not value
+            or value != value.strip() or FORBIDDEN_YAML_CHAR_RE.search(value)
+            or any(char in value for char in "\t\n\r\x85\u2028\u2029\ufeff")
+            or any(0xD800 <= ord(char) <= 0xDFFF for char in value)):
+        raise OpenProblemError(f"{label}: unsupported front matter scalar")
+    return value
+
+
+Fields = dict[str, str | list[str] | None]
+
+
+def front_matter(path: bytes, blob: bytes) -> tuple[Fields, str]:
     label = os.fsdecode(path)
     try:
         text = blob.decode("utf-8")
@@ -141,17 +171,17 @@ def front_matter(path: bytes, blob: bytes) -> tuple[dict[str, str | list[str]], 
     end = text.find("\n---\n", 4)
     if end < 0:
         raise OpenProblemError(f"{label}: unterminated front matter")
-    # The upstream format uses plain scalar lines and two-space block lists.
-    # No tabs, folding, comments, collections within items, or YAML type coercion.
-    fields: dict[str, str | list[str]] = {}
+    # Single-line scalars and two-space block lists; [] is the only flow form.
+    fields: Fields = {}
     current = None
     for line in text[4:end].split("\n"):
         if line.startswith("  - ") and current is not None:
             value = fields[current]
-            item = line[4:]
+            item = parse_scalar(line[4:], label)
             if not isinstance(value, list):
                 raise OpenProblemError(f"{label}: malformed front matter list")
-            validate_plain_scalar(item, label)
+            if item is None:
+                raise OpenProblemError(f"{label}: unsupported front matter scalar")
             value.append(item)
             continue
         match = re.fullmatch(r"([a-z_]+):(?: (.+))?", line)
@@ -160,17 +190,56 @@ def front_matter(path: bytes, blob: bytes) -> tuple[dict[str, str | list[str]], 
         current, scalar = match.groups()
         if current in fields:
             raise OpenProblemError(f"{label}: duplicate front matter key {current}")
-        if scalar is not None:
-            validate_plain_scalar(scalar, label)
-        fields[current] = scalar if scalar is not None else []
+        if scalar is None or scalar == "[]":
+            fields[current] = None if scalar is None and current == "doi" else []
+            if scalar == "[]":
+                current = None
+        else:
+            fields[current] = parse_scalar(scalar, label)
     return fields, text[end + 5:]
 
 
-def required_scalar(fields: dict[str, str | list[str]], key: str, path: bytes) -> str:
+def required_scalar(fields: Fields, key: str, path: bytes) -> str:
     value = fields.get(key)
     if not isinstance(value, str) or not value:
         raise OpenProblemError(f"{os.fsdecode(path)}: {key} must be a nonempty scalar")
     return value
+
+
+def validate_stable_url(value: str, label: str) -> None:
+    """Require an already canonical absolute HTTPS URI, without credentials."""
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+        host = parsed.hostname
+    except ValueError as exc:
+        raise OpenProblemError(f"{label}: invalid canonical HTTPS URL") from exc
+    if (not value.startswith("https://") or not host or not parsed.path.startswith("/")
+            or parsed.username is not None or parsed.password is not None
+            or any(ord(char) <= 32 or ord(char) >= 127 for char in value)
+            or any(char in value for char in '\\<>"{}|^`')
+            or re.search(r"%(?![0-9A-Fa-f]{2})", value)
+            or any(part in {".", ".."} for part in parsed.path.split("/"))
+            or re.search(r"(?:^|/)(?:%2e|\.){1,2}(?:/|$)", parsed.path, re.IGNORECASE)
+            or parsed.netloc != (f"[{host}]" if ":" in host else host)
+                + (f":{port}" if port is not None else "")
+            or port == 443 or parsed.netloc.endswith(":")):
+        raise OpenProblemError(f"{label}: invalid canonical HTTPS URL")
+    if ":" not in host and not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9.])?", host):
+        raise OpenProblemError(f"{label}: invalid canonical HTTPS URL")
+
+
+def citation(fields: Fields, path: bytes) -> tuple[str | None, str | None]:
+    label = os.fsdecode(path)
+    doi = fields["doi"]
+    if doi is not None and (not isinstance(doi, str) or not DOI_RE.fullmatch(doi)):
+        raise OpenProblemError(f"{label}: invalid DOI")
+    url = required_scalar(fields, "url", path) if "url" in fields else None
+    if url is not None:
+        validate_stable_url(url, label)
+    if (doi is None) == (url is None):
+        raise OpenProblemError(f"{label}: citation requires exactly one DOI or URL")
+    return doi, url
 
 
 def parse_dossiers(blobs: list[tuple[bytes, bytes]]) -> list[Problem]:
@@ -179,10 +248,10 @@ def parse_dossiers(blobs: list[tuple[bytes, bytes]]) -> list[Problem]:
     for path, blob in blobs:
         fields, body = front_matter(path, blob)
         label = os.fsdecode(path)
-        if set(fields) != PROBLEM_KEYS:
+        if set(fields) - {"url"} != PROBLEM_KEYS:
             raise OpenProblemError(
                 f"{label}: unsupported problem schema; expected slug, bibkey, doi, "
-                "triage, motivation_gids"
+                "triage, motivation_gids, with optional url"
             )
         slug = required_scalar(fields, "slug", path)
         if not SLUG_RE.fullmatch(slug) or path != f"Problems/{slug}.md".encode():
@@ -191,22 +260,22 @@ def parse_dossiers(blobs: list[tuple[bytes, bytes]]) -> list[Problem]:
             raise OpenProblemError(f"{label}: duplicate or out-of-order problem slug {slug}")
         previous = slug
         bibkey = required_scalar(fields, "bibkey", path)
-        doi = required_scalar(fields, "doi", path)
+        doi, url = citation(fields, path)
         triage = required_scalar(fields, "triage", path)
         if not BIBKEY_RE.fullmatch(bibkey):
             raise OpenProblemError(f"{label}: noncanonical bibkey")
-        if not DOI_RE.fullmatch(doi):
-            raise OpenProblemError(f"{label}: invalid DOI")
         if triage not in {"theorem", "window", "wall"}:
             raise OpenProblemError(f"{label}: unknown triage")
         gids = fields["motivation_gids"]
         if (not isinstance(gids, list) or not gids or len(set(gids)) != len(gids)
                 or any(not GID_RE.fullmatch(gid) for gid in gids)):
             raise OpenProblemError(f"{label}: motivation_gids must be unique formal GIDs")
-        titles = re.findall(r"^# (.+)$", body, re.MULTILINE)
-        if len(titles) != 1 or not titles[0].strip():
-            raise OpenProblemError(f"{label}: expected one nonempty problem title")
-        problems.append(Problem(slug, titles[0], bibkey, doi, triage, path))
+        titles = re.findall(r"^#(?: (.*))?$", body, re.MULTILINE)
+        if len(titles) > 1 or (titles and not titles[0].strip()):
+            raise OpenProblemError(f"{label}: expected at most one nonempty problem title")
+        # The producer requires problem sections but does not require an H1.
+        # Match the navigation's filename fallback when no title is supplied.
+        problems.append(Problem(slug, titles[0] if titles else slug, bibkey, doi, url, triage, path))
     return problems
 
 
@@ -228,7 +297,6 @@ def parse_markers(blobs: list[tuple[bytes, bytes]], slugs: set[str]) -> dict[str
             lines = blob.decode("utf-8").splitlines()
         except UnicodeError as exc:
             raise OpenProblemError(f"{os.fsdecode(path)}: resolution marker page is not UTF-8") from exc
-        previous = ""
         for number, line in enumerate(lines, 1):
             if MARKER_PREFIX not in line:
                 continue
@@ -259,9 +327,6 @@ def parse_markers(blobs: list[tuple[bytes, bytes]], slugs: set[str]) -> dict[str
                 raise OpenProblemError(f"{label} references unknown problem slug {slug}")
             if slug in resolutions:
                 raise OpenProblemError(f"{label} has duplicate resolution slug {slug}")
-            if slug <= previous:
-                raise OpenProblemError(f"{label} has out-of-order resolution slug {slug}")
-            previous = slug
             resolutions[slug] = Resolution(kind, gid, path, number)
     return resolutions
 
@@ -291,7 +356,7 @@ def markdown_text(text: str) -> str:
     return "".join("\\" + char if char in string.punctuation else char for char in text)
 
 
-def derive_open_problems(upstream: Path, sha: str) -> ProblemPage:
+def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) -> ProblemPage:
     entries = input_entries(upstream, sha)
     dossier_entries = []
     for entry in entries:
@@ -304,7 +369,7 @@ def derive_open_problems(upstream: Path, sha: str) -> ProblemPage:
     # Git orders filenames, where alpha-beta.md precedes alpha.md; order by slug.
     dossier_entries.sort(key=lambda entry: entry.path[:-3])
     problems = parse_dossiers(input_blobs(upstream, dossier_entries))
-    notes: dict[str, tuple[bytes, str]] = {}
+    notes: dict[str, tuple[bytes, str | None, str | None]] = {}
     for bibkey in sorted({problem.bibkey for problem in problems}):
         candidates = [entry for entry in entries
                       if entry.path.startswith(b"Library/")
@@ -317,25 +382,23 @@ def derive_open_problems(upstream: Path, sha: str) -> ProblemPage:
             raise OpenProblemError(f"Library bibkey {bibkey} must be a regular Git blob")
         path, blob = input_blobs(upstream, candidates)[0]
         fields, _ = front_matter(path, blob)
-        if set(fields) != LIBRARY_KEYS:
+        if set(fields) - {"url"} != LIBRARY_KEYS:
             raise OpenProblemError(f"{os.fsdecode(path)}: missing or unknown Library metadata keys")
-        for key in sorted(LIBRARY_KEYS - {"strata_touched"}):
+        for key in sorted(LIBRARY_KEYS - {"strata_touched", "doi"}):
             required_scalar(fields, key, path)
         strata = fields["strata_touched"]
-        if not isinstance(strata, list) or not strata:
-            raise OpenProblemError(f"{os.fsdecode(path)}: strata_touched must be a nonempty block list")
+        if not isinstance(strata, list):
+            raise OpenProblemError(f"{os.fsdecode(path)}: strata_touched must be a list")
         if required_scalar(fields, "bibkey", path) != bibkey:
             raise OpenProblemError(f"{os.fsdecode(path)}: bibkey/path mismatch")
-        doi = required_scalar(fields, "doi", path)
-        if not DOI_RE.fullmatch(doi):
-            raise OpenProblemError(f"{os.fsdecode(path)}: invalid DOI")
-        notes[bibkey] = path, doi
+        doi, url = citation(fields, path)
+        notes[bibkey] = path, doi, url
     for problem in problems:
-        path, doi = notes[problem.bibkey]
-        if doi != problem.doi:
+        path, doi, url = notes[problem.bibkey]
+        if (doi, url) != (problem.doi, problem.url):
             raise OpenProblemError(
-                f"{os.fsdecode(path)}: DOI {doi!r} disagrees with "
-                f"{os.fsdecode(problem.path)}: DOI {problem.doi!r}"
+                f"{os.fsdecode(path)}: citation {(doi, url)!r} disagrees with "
+                f"{os.fsdecode(problem.path)}: citation {(problem.doi, problem.url)!r}"
             )
     blueprint = [entry for entry in entries
                  if entry.path.startswith(b"Blueprint/") and is_published_path(entry.path)
@@ -346,11 +409,11 @@ def derive_open_problems(upstream: Path, sha: str) -> ProblemPage:
         for path in sorted({resolution.path for resolution in resolutions.values()})
     }
     lines = [
-        "# Open problems from research papers", "",
+        "# External open problems", "",
         f"**{len(resolutions)} of {len(problems)} solved in this repository.**", "",
         'What "solved" means here: a frozen Lean theorem in this repository is recorded',
         "against the problem. Nobody has machine-checked that the theorem says the same",
-        "thing as the paper, and a problem with no record here may still have been solved",
+        "thing as the source, and a problem with no record here may still have been solved",
         "by someone else.", "",
     ]
     for heading, solved, count in (
@@ -361,10 +424,13 @@ def derive_open_problems(upstream: Path, sha: str) -> ProblemPage:
         for problem in problems:
             if (problem.slug in resolutions) != solved:
                 continue
-            note_path, doi = notes[problem.bibkey]
+            note_path, doi, url = notes[problem.bibkey]
             dossier_url = quote_from_bytes(problem.path, safe="/")
             note_url = quote_from_bytes(note_path, safe="/")
-            doi_url = "https://doi.org/" + quote_from_bytes(doi.encode(), safe="/")
+            source_url = ("https://doi.org/" + quote_from_bytes(doi.encode(), safe="/")
+                          if doi is not None else url)
+            # Angle brackets preserve canonical URL punctuation in Markdown destinations.
+            source_target = f"<{source_url}>" if url is not None else source_url
             lines.extend([f"### {markdown_text(problem.title)}", ""])
             resolution = resolutions.get(problem.slug)
             if resolution is not None:
@@ -377,11 +443,12 @@ def derive_open_problems(upstream: Path, sha: str) -> ProblemPage:
                 ])
             lines.extend([
                 f"[Problem details]({dossier_url}) \u00b7 [Reading note]({note_url}) "
-                f"\u00b7 [Source paper]({doi_url})", "",
+                f"\u00b7 [Source]({source_target})", "",
             ])
     lines.extend([
         "## How this list is made", "",
         f"Source revision: [`{sha[:8]}`]({UPSTREAM_REPOSITORY}/commit/{sha}).", "",
+        *([snapshot_freshness(built_at), ""] if built_at is not None else []),
         "The list is generated from problem files, reading notes, and resolution records in theorem pages at this source revision.",
         "The records are read as text, so ordinary prose can produce one; this page does not check that a record came from the repository's own verified claim.",
         "This page does not run the repository's checks or verify the named theorems or their Lean proofs.", "",

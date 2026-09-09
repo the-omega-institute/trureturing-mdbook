@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import quote_from_bytes
 
 try:
+    from site_freshness import generator_revision, snapshot_freshness
     from open_problems import OpenProblemError, derive_open_problems
     from source_tree import (
         PUBLISHED_ROOTS,
@@ -27,6 +28,7 @@ try:
         list_source_entries as read_source_entries,
     )
 except ModuleNotFoundError:
+    from scripts.site_freshness import generator_revision, snapshot_freshness
     from scripts.open_problems import OpenProblemError, derive_open_problems
     from scripts.source_tree import (
         PUBLISHED_ROOTS,
@@ -352,7 +354,7 @@ def build_changelog(
     return "\n".join(lines)
 
 
-def build_index(sha: str) -> str:
+def build_index(sha: str, built_at: str) -> str:
     commit_url = f"{UPSTREAM_REPOSITORY}/commit/{sha}"
     return f"""# trureturing Blueprint
 
@@ -361,7 +363,7 @@ This site is an automatically derived projection of the `Blueprint/`, `Problems/
 The source of mathematical truth is always the upstream repository, never this site.
 
 The content shown here is pinned to upstream commit [`{sha}`]({commit_url}).
-The site checks for upstream changes and rebuilds once per day.
+{snapshot_freshness(built_at)}
 
 The generator, configuration and workflows in this repository are MIT licensed. The upstream
 content on these pages is fetched from upstream at build time; upstream declares no content
@@ -381,9 +383,9 @@ window.addEventListener("DOMContentLoaded", function () {{
 """
 
 
-def build_open_problems(upstream: Path, sha: str) -> str:
+def build_open_problems(upstream: Path, sha: str, built_at: str) -> str:
     try:
-        return derive_open_problems(upstream, sha).markdown
+        return derive_open_problems(upstream, sha, built_at).markdown
     except OpenProblemError as exc:
         raise BuildError(str(exc)) from exc
 
@@ -426,6 +428,8 @@ def write_projection(
     blobs: list[bytes],
     upstream: Path,
     sha: str,
+    built_at: str,
+    revision: str,
 ) -> dict[str, object]:
     titles: dict[bytes, str] = {}
     staging_resolved = staging.resolve()
@@ -444,9 +448,9 @@ def write_projection(
     (staging / "SUMMARY.md").write_text(
         build_summary(entries, titles, directories), encoding="utf-8"
     )
-    (staging / "index.md").write_text(build_index(sha), encoding="utf-8")
+    (staging / "index.md").write_text(build_index(sha, built_at), encoding="utf-8")
     (staging / "open-problems.md").write_text(
-        build_open_problems(upstream, sha), encoding="utf-8"
+        build_open_problems(upstream, sha, built_at), encoding="utf-8"
     )
     (staging / "changelog.md").write_text(
         build_changelog(
@@ -466,7 +470,8 @@ def write_projection(
         "upstream_sha": sha,
         "file_count": len(entries),
         "tool_version": TOOL_VERSION,
-        "built_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "built_at": built_at,
+        "generator_revision": revision,
     }
     (staging / PROJECTION_MARKER).write_bytes(PROJECTION_MARKER_CONTENT)
     (staging / "provenance.json").write_text(
@@ -476,20 +481,25 @@ def write_projection(
     return provenance
 
 
-def build_site(upstream: Path, output: Path) -> dict[str, object]:
+def build_site(upstream: Path, output: Path, *, upstream_sha: str | None = None) -> dict[str, object]:
     upstream = upstream.resolve()
     if not upstream.is_dir():
         raise BuildError(f"upstream checkout is not a directory: {upstream}")
     output = safe_output_path(upstream, output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    sha = capture_upstream_sha(upstream)
+    built_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    revision = generator_revision()
+    sha = upstream_sha if upstream_sha is not None else capture_upstream_sha(upstream)
+    if not SHA_RE.fullmatch(sha.encode("ascii")):
+        raise BuildError("upstream snapshot must be a full object ID")
+    run_git(upstream, "cat-file", "-e", f"{sha}^{{commit}}")
     entries = list_source_entries(upstream, sha)
     blobs = read_blobs(upstream, entries)
 
     staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.tmp-", dir=output.parent))
     try:
-        provenance = write_projection(staging, entries, blobs, upstream, sha)
+        provenance = write_projection(staging, entries, blobs, upstream, sha, built_at, revision)
         if output.exists():
             shutil.rmtree(output)
         os.replace(staging, output)
@@ -503,13 +513,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("upstream", type=Path, help="path to the upstream Git checkout")
     parser.add_argument("output", type=Path, help="generated mdBook source directory")
+    parser.add_argument("--upstream-sha", help="full immutable SHA captured by the freshness probe")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        provenance = build_site(args.upstream, args.output)
+        provenance = build_site(args.upstream, args.output, upstream_sha=args.upstream_sha)
     except BuildError as exc:
         print(f"build-site: {exc}", file=sys.stderr)
         return 1

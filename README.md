@@ -6,7 +6,15 @@ mdBook site and publishes it through GitHub Pages. The site is a derived artifac
 and search — it is not the source of mathematical truth. That is always the upstream repository
 and its Git history.
 
-A daily workflow captures a single commit SHA from the upstream `dev` branch, publishes only the
+A workflow checks the upstream `dev` branch on a nominal 15-minute schedule
+(`7,22,37,52 * * * *` UTC). GitHub may delay or skip scheduled runs, and build and deployment
+time adds to publication latency. A lightweight probe captures one commit SHA and compares it
+with the public deployment's `provenance.json` before installing tools or fetching history.
+Only an identical upstream SHA **and** generator revision skip the build. Missing, malformed or
+unreachable provenance attempts a build; failed builds or deployments leave the previous public
+provenance in place, so later checks retry. Main pushes and manual runs always rebuild.
+
+The build fetches exactly that captured commit with full history, publishes only the
 regular `Blueprint/**/*.md`, `Problems/*.md` and `Library/**/*.md` blobs from that tree,
 and derives the navigation, the home page, an
 external open problems page, a first-parent changelog covering the last 30 dates with changes,
@@ -17,6 +25,18 @@ set, page mapping, math output, relative links and artifact size all pass their 
 Nothing derived is committed. The upstream checkout, the projected source tree, `SUMMARY.md`, the
 changelog, the search index and the built book are all recomputed on every run and never enter the
 Git index.
+
+Provenance includes `upstream_sha`, `file_count`, `tool_version`, `built_at` and
+`generator_revision`. The generator revision is a SHA-256 digest of the named build inputs in
+`scripts/site_freshness.py` (configuration, workflow and Python scripts), so even local edits are
+identified accurately. One UTC build timestamp is shared by provenance, the home page and the
+problem page. It describes when that snapshot build began; it is not a last-checked timestamp.
+Checks that skip an identical deployment leave the snapshot timestamp intact.
+
+For recovery or branch validation, dispatch **Build and deploy Pages** on the desired ref.
+A branch run builds, verifies and uploads the Pages artifact for inspection. Only a successful
+build with an uploaded artifact on `refs/heads/main` can deploy. Each ref has its own concurrency
+group; production runs are serialized. No upstream dispatcher or additional secret is required.
 
 ## Local build
 
@@ -29,6 +49,10 @@ MDBOOK_BOOK__SRC="$SITE_SRC" mdbook build --dest-dir book
 pagefind_extended --site book --force-language zh
 python3 scripts/verify-site.py /path/to/trureturing "$SITE_SRC" book
 ```
+
+To reproduce a captured snapshot even if upstream HEAD has moved, add
+`--upstream-sha <full-commit-SHA>` to `build-site.py`. The checkout must contain that commit's
+complete history, including frozen-state additions.
 
 Pagefind's segmentation language is pinned to `zh` while the mdBook page language stays `en`; the
 two are independent knobs. Almost all Blueprint content is English, but a handful of upstream pages
@@ -51,11 +75,12 @@ python3 -m unittest discover -s tests -v
 ## External open problems
 
 The generated root page `open-problems.md` lists every `Problems/<slug>.md` dossier,
-its research triage, its Library citation and DOI, and any matching resolution marker
+its Library citation (DOI or stable HTTPS URL), and any matching resolution marker
 in published Blueprint Markdown. All three roots are published byte-for-byte and
 included in the existing navigation and changelog. Dossier, Library note and theorem
-links are repository-relative Markdown paths that mdBook rewrites to HTML. DOI links
-remain at `doi.org`; the snapshot commit link remains at GitHub for provenance.
+links are repository-relative Markdown paths that mdBook rewrites to HTML. Source links
+use `doi.org` for a DOI or the recorded URL for sources such as OEIS; the snapshot commit
+link remains at GitHub for provenance.
 The global GitHub toolbar shortcut is disabled so it adds no external navigation.
 
 All three input trees are read with `git ls-tree` and `git cat-file` at the same
@@ -64,23 +89,33 @@ the page from those Git objects, compares its bytes, requires its HTML mapping, 
 checks its rendered links. CI runs the Python tests before building the site.
 
 The dossier parser accepts the current closed key set: `slug`, `bibkey`, `doi`,
-`triage`, `motivation_gids`. Front matter must use UTF-8 without BOM or CR, plain
-scalar lines, and two-space block lists. Unsupported YAML syntax, missing or unknown
+`triage`, `motivation_gids`, plus optional `url`. Front matter must use UTF-8 without BOM or CR,
+single-line scalars (plain, double-quoted or single-quoted), and two-space block lists.
+Unsupported YAML syntax, missing or unknown
 keys, duplicate keys, path/slug disagreement, and duplicate or out-of-order dossier
 slugs fail the build. Each bibkey must select exactly one regular Library note with
-the current closed Library key set, whose DOI exactly matches the dossier's DOI,
-including case. Both DOI values must match `^10\.[0-9]{4,9}/\S+$`; journal DOIs and
-arXiv DOIs are accepted. The retired `arxiv_id` key is rejected, including alongside `doi`.
-Every Library field except `strata_touched` must be a nonempty scalar;
-`strata_touched` must be a nonempty block list of scalars. Input documents reject
+the current closed Library key set (also allowing optional `url`), whose citation exactly
+matches the dossier's decoded DOI/URL pair, including case. The `doi` key is required but
+nullable (bare, `null` or `~`); exactly one non-null DOI or URL is required for each dossier
+and its selected note. Non-null DOIs must match `^10\.[0-9]{4,9}/\S+$`; journal DOIs and
+arXiv DOIs are accepted. URLs must already be canonical absolute HTTPS URLs with a host and
+without credentials. The retired `arxiv_id` key is rejected, including alongside `doi`.
+Every Library field except nullable `doi` and `strata_touched` must be a nonempty scalar;
+`strata_touched` may be an empty list (bare or `[]`) or a block list of scalars.
+Dossier `motivation_gids` must still be a nonempty list of unique formal GIDs. Input documents reject
 YAML-forbidden control characters, including NUL, even outside the front matter.
 The reader implements a restricted text format, not general YAML: scalar values
 must occupy one line without tabs, Unicode line breaks, embedded BOM, leading or
-trailing whitespace, comments, or mapping separators (including a final colon).
-Quoted values, tags, anchors, aliases, flow collections, block scalars, reserved
-leading indicators, and nested lists or mappings are unsupported. Punctuation
+trailing whitespace. Plain scalars cannot contain comments or mapping separators
+(including a final colon). Quoted scalars can contain such punctuation; double-quoted
+values decode JSON string escapes, and single-quoted contents remain literal, matching the
+producer's subset parser. Malformed quotes and decoded noncanonical text fail the build.
+Tags, anchors, aliases, nonempty flow collections, block scalars, reserved
+leading plain indicators, and nested lists or mappings are unsupported. Punctuation
 inside block-context text such as `C#`, `a:b`, and `text [with brackets]` is retained.
-Numbers, booleans, and null spellings are literal strings with no implicit typing.
+Numbers and booleans remain text; unquoted `null` and `~` represent null.
+An H1 dossier title is optional in the producer contract. The page uses the dossier slug
+when absent, matching navigation; empty or multiple H1 titles are rejected.
 
 Resolution parsing recognizes standalone `scribe-open-problem-resolution-v1` HTML
 comments with exactly `problem_slug`, `declaration_gid` and `resolution_kind`
@@ -89,8 +124,8 @@ reader. `declaration_gid` must be a canonical formal GID with a declaration sele
 such as `D5/S1/Words/Sumfree/GreedyThreeSumfreeTwoParameter.conjecture17`.
 Any occurrence of the reserved marker prefix must have valid syntax, version, and
 payload, even in a Markdown code example. Slugs must exist in the dossier set, be
-globally unique among markers, and increase lexically within each Blueprint page;
-ordering across different Blueprint pages is immaterial. Violations fail the build.
+globally unique among markers. Markers may follow the producer's document/theorem order;
+the display remains ordered by dossier slug within each section. Violations fail the build.
 
 These comments are records, not validated typed claims: ordinary narrative can emit
 identical bytes. The page does not consume a Describe report, establish repository
@@ -118,7 +153,7 @@ git log --diff-filter=A --format=%cs --reverse --no-renames "$SHA" -- \
 
 The first output line supplies the date, including if the file was later deleted
 and re-added. Missing history, Git failures and malformed dates fail the build.
-The workflow's non-shallow `--filter=blob:none --sparse` clone retains this history
+The workflow's non-shallow `fetch --filter=blob:none` and sparse checkout retain this history
 even with only `Blueprint Problems Library` checked out; `Golden/` need not be
 materialized. The same publication predicate selects source blobs, changelog paths
 and the files whose bytes the verifier checks.
