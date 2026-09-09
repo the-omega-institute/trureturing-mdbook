@@ -22,11 +22,13 @@
 !/scripts/open_problems.py
 !/scripts/verify-site.py
 !/scripts/site_freshness.py
+!/scripts/render_source_links.py
 !/tests/
 /tests/*
 !/tests/test_build_site.py
 !/tests/test_open_problems.py
 !/tests/test_site_freshness.py
+!/tests/test_source_links.py
 !/.github/
 /.github/*
 !/.github/workflows/
