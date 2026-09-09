@@ -46,6 +46,7 @@ Requires Python 3.10 or later, Git, mdBook 0.5.4, mdbook-katex 0.10.0 and Pagefi
 SITE_SRC="$(mktemp -d)"
 python3 scripts/build-site.py /path/to/trureturing "$SITE_SRC"
 MDBOOK_BOOK__SRC="$SITE_SRC" mdbook build --dest-dir book
+python3 scripts/render_source_links.py /path/to/trureturing "$SITE_SRC" book
 pagefind_extended --site book --force-language zh
 python3 scripts/verify-site.py /path/to/trureturing "$SITE_SRC" book
 ```
@@ -53,6 +54,15 @@ python3 scripts/verify-site.py /path/to/trureturing "$SITE_SRC" book
 To reproduce a captured snapshot even if upstream HEAD has moved, add
 `--upstream-sha <full-commit-SHA>` to `build-site.py`. The checkout must contain that commit's
 complete history, including frozen-state additions.
+
+After mdBook renders, `render_source_links.py` turns relative anchors to existing,
+unpublished upstream files (for example `.lean` source) into GitHub blob permalinks at
+the SHA in the source and book provenance. This includes mdBook's rebased links in
+`print.html`. Only exact paths to regular files in that Git tree qualify; missing paths
+are never inferred from alternate extensions. Published-page navigation and local resources
+stay relative. Query strings and fragments are retained. Only rendered anchor attributes
+change; copied upstream Markdown and all other HTML bytes stay intact. This step runs before
+Pagefind and the unchanged release gate, which still rejects missing relative resources.
 
 Pagefind's segmentation language is pinned to `zh` while the mdBook page language stays `en`; the
 two are independent knobs. Almost all Blueprint content is English, but a handful of upstream pages

@@ -134,6 +134,9 @@ jobs:
       - name: Build mdBook
         run: MDBOOK_BOOK__SRC="$RUNNER_TEMP/trureturing-mdbook-site-src" mdbook build --dest-dir book
 
+      - name: Render immutable upstream source links
+        run: python3 scripts/render_source_links.py .upstream "$RUNNER_TEMP/trureturing-mdbook-site-src" book
+
       - name: Build Pagefind index
         run: pagefind_extended --site book --force-language zh
 
