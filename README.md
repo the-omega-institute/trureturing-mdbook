@@ -7,12 +7,17 @@ and search — it is not the source of mathematical truth. That is always the up
 and its Git history.
 
 A workflow checks the upstream `dev` branch on a nominal 15-minute schedule
-(`7,22,37,52 * * * *` UTC). GitHub may delay or skip scheduled runs, and build and deployment
-time adds to publication latency. A lightweight probe captures one commit SHA and compares it
-with the public deployment's `provenance.json` before installing tools or fetching history.
+(`7,22,37,52 * * * *` UTC). When the upstream push notifier is installed and its dedicated
+credential is configured (see activation below), each upstream `dev` push also requests this
+repository's existing Pages workflow on `main`. Scheduled checks remain recovery for missed or
+failed notifications. Cron alone has exhibited multi-hour delays; neither trigger guarantees
+hard real-time publication. GitHub may delay or skip scheduled runs, and queueing, build and
+deployment time add to publication latency. A lightweight scheduled probe captures one commit
+SHA and compares it with the public deployment's `provenance.json` before installing tools or
+fetching history.
 Only an identical upstream SHA **and** generator revision skip the build. Missing, malformed or
 unreachable provenance attempts a build; failed builds or deployments leave the previous public
-provenance in place, so later checks retry. Main pushes and manual runs always rebuild.
+provenance in place, so later checks retry. Main pushes and all workflow dispatches always rebuild.
 
 The build fetches exactly that captured commit with full history, publishes only the
 regular `Blueprint/**/*.md`, `Problems/*.md` and `Library/**/*.md` blobs from that tree,
@@ -36,7 +41,44 @@ Checks that skip an identical deployment leave the snapshot timestamp intact.
 For recovery or branch validation, dispatch **Build and deploy Pages** on the desired ref.
 A branch run builds, verifies and uploads the Pages artifact for inspection. Only a successful
 build with an uploaded artifact on `refs/heads/main` can deploy. Each ref has its own concurrency
-group; production runs are serialized. No upstream dispatcher or additional secret is required.
+group; production runs are serialized without cancelling an active publication. GitHub can
+replace pending runs and does not guarantee their order. Every run captures current upstream
+`dev` when its probe executes; notifications do not pass a source SHA. Thus rapid successive or
+delayed notifications can coalesce into a current snapshot without replaying old event snapshots.
+The captured SHA remains fixed through projection, verification and deployment. Repeated dispatches
+may rebuild the same snapshot. Failed notification jobs can be rerun after fixing their cause;
+later pushes and scheduled checks also retry publication. A dispatch accepted by GitHub is not
+evidence of a successful deployment.
+
+## Upstream push notification activation
+
+The sender is the independent `notify-mdbook` job in upstream
+`.github/workflows/ci.yml`, restricted to pushes to that repository's `dev` branch. It has no
+checkout or dependency on the admission jobs. It only sends
+`POST /repos/the-omega-institute/trureturing-mdbook/actions/workflows/pages.yml/dispatches`
+with `{"ref":"main"}`. This repository owns the full publication pipeline and needs no new secret.
+
+Installing the workflow does **not** complete activation. The credential owner must create a
+dedicated fine-grained personal access token with resource owner `the-omega-institute`, repository
+access limited to **only** `trureturing-mdbook`, and repository **Actions: write** (plus automatic
+Metadata: read). No Contents, Pages, Administration or organization permissions are needed. Complete
+any required organization approval before use, choose an expiry, and arrange renewal with the owner.
+Store that newly issued value as the upstream repository Actions secret **`MDBOOK_DISPATCH_TOKEN`**
+in `the-omega-institute/trureturing`, through GitHub's secret entry UI. Do not reuse an interactive
+CLI credential or put token values in files, commands, PRs or logs. Upstream's built-in
+`GITHUB_TOKEN` cannot dispatch a workflow in another repository. A missing, expired or rejected
+credential makes the notifier fail; there is no successful empty-token skip. The job uses
+`permissions: {}` for upstream's built-in token; dispatch uses only the dedicated secret.
+
+After the sender is reviewed and merged through upstream's required checks and the secret is
+configured, observe a **real upstream `dev` push**. Record its SHA and availability time, the
+upstream `notify-mdbook` job's acceptance time, the resulting `workflow_dispatch` run on website
+`main`, its captured SHA and deployment completion time. Check the canonical
+[`provenance.json`](https://the-omega-institute.github.io/trureturing-mdbook/provenance.json) and
+[problem page](https://the-omega-institute.github.io/trureturing-mdbook/open-problems.html) against
+that captured source, including the triggering result. A newer captured descendant can include
+several pushes. Measure result availability to visible publication, including runner queueing;
+manual dispatch, lint and an accepted API request alone do not establish this integration.
 
 ## Local build
 

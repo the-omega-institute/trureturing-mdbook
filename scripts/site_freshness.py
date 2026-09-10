@@ -27,6 +27,7 @@ GENERATOR_INPUTS = (
 )
 FRESHNESS_POLICY = (
     "Upstream changes are checked on a nominal 15-minute schedule. "
+    "When upstream push notifications are enabled, they also request builds. "
     "GitHub may delay or skip scheduled runs, and builds and deployment take additional time. "
     "The build time describes this snapshot, not the last check for changes."
 )
