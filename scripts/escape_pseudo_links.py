@@ -10,6 +10,12 @@ from typing import Any
 
 
 FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+# A coefficient selector and polynomial factor, e.g. [X^(m-1)](1-A).
+# A following power distinguishes the standalone prose form from a link;
+# the alphabet excludes URL/path syntax such as dots, slashes and colons.
+COEFFICIENT_FACTOR_RE = re.compile(
+    r"\[[A-Za-z]\^[A-Za-z0-9+*^() -]+\]\([A-Za-z0-9+*^() -]+\)"
+)
 
 
 def _is_escaped(text: str, index: int) -> bool:
@@ -129,10 +135,15 @@ def escape_pseudo_links(content: str) -> str:
             if (
                 line[cursor] == "["
                 and not _is_escaped(line, cursor)
-                and cursor > 0
-                and not line[cursor - 1].isspace()
-                and line[cursor - 1] != "]"
-                and _inline_link_end(line, cursor) is not None
+                and (link_end := _inline_link_end(line, cursor)) is not None
+                and (
+                    (cursor > 0 and not line[cursor - 1].isspace()
+                     and line[cursor - 1] != "]")
+                    or (
+                        COEFFICIENT_FACTOR_RE.fullmatch(line[cursor:link_end]) is not None
+                        and line[link_end : link_end + 1] == "^"
+                    )
+                )
             ):
                 output.append("\\[")
                 cursor += 1
