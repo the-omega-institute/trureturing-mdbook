@@ -13,8 +13,9 @@ FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 # A coefficient selector and polynomial factor, e.g. [X^(m-1)](1-A).
 # A following power distinguishes the standalone prose form from a link;
 # the alphabet excludes URL/path syntax such as dots, slashes and colons.
+# Both ASCII hyphen-minus and Unicode minus (U+2212) occur upstream.
 COEFFICIENT_FACTOR_RE = re.compile(
-    r"\[[A-Za-z]\^[A-Za-z0-9+*^() -]+\]\([A-Za-z0-9+*^() -]+\)"
+    r"\[[A-Za-z]\^[A-Za-z0-9+*^() −-]+\]\([A-Za-z0-9+*^() −-]+\)"
 )
 
 

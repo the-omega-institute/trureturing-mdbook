@@ -390,6 +390,10 @@ class EscapePseudoLinksTests(unittest.TestCase):
             "[X^(m-1)](1-A)^m/(1-mX)=0",
             "[X^(m-1)](1-A)^(m squared)/(1-m squared X)=0",
             "[x^n](1-(A+B))^2",
+            # Library/Words/oeis2026triage0911b.md at upstream fe47b6c24bb2.
+            "[X^(m−1)](1−F)^m/(1−mX)=0",
+            "[X^(m−1)](1-F)^m",
+            "[X^(m-1)](1−F)^m",
         ):
             for prefix in ("", "For every m>1, ", "The equation is\n"):
                 with self.subTest(expression=expression, prefix=prefix):
@@ -399,18 +403,20 @@ class EscapePseudoLinksTests(unittest.TestCase):
                     self.assertEqual(escape_pseudo_links.escape_pseudo_links(transformed), transformed)
 
     def test_standalone_coefficient_rule_preserves_links_and_protected_regions(self) -> None:
-        expression = "[X^(m-1)](1-A)^m"
-        content = (
-            "[real](1-A)^m and [X^n](notes.md)^2 and [X^n](../notes.md)^2\n"
-            "[X^n](https://example.org)^2 and [X^n](#coefficient)^2\n"
-            "[X^n](1-A) and [X^n](appendix)\n"
-            f"`{expression}` and ``{expression}``\n"
-            f"${expression}$ and $$\n{expression}\n$$\n"
-            f"\\({expression}\\) and \\[\n{expression}\n\\]\n"
-            f"```text\n{expression}\n```\n~~~\n{expression}\n~~~\n"
-            f"\\{expression}\n"
-        )
-        self.assertEqual(escape_pseudo_links.escape_pseudo_links(content), content)
+        for expression in ("[X^(m-1)](1-A)^m", "[X^(m−1)](1−F)^m"):
+            with self.subTest(expression=expression):
+                content = (
+                    "[real](1-A)^m and [X^n](notes.md)^2 and [X^n](../notes.md)^2\n"
+                    "[X^n](https://example.org)^2 and [X^n](#coefficient)^2\n"
+                    "[X^n](1−F.md)^2 and [X^n](../1−F)^2 and [X^n](#1−F)^2\n"
+                    "[X^n](1-A) and [X^n](1−F) and [X^n](appendix)\n"
+                    f"`{expression}` and ``{expression}``\n"
+                    f"${expression}$ and $$\n{expression}\n$$\n"
+                    f"\\({expression}\\) and \\[\n{expression}\n\\]\n"
+                    f"```text\n{expression}\n```\n~~~\n{expression}\n~~~\n"
+                    f"\\{expression}\n"
+                )
+                self.assertEqual(escape_pseudo_links.escape_pseudo_links(content), content)
 
     def test_mdbook_protocol_transforms_nested_chapters_in_memory(self) -> None:
         book = {
