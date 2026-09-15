@@ -57,7 +57,8 @@ complete history, including frozen-state additions.
 
 Before rendering, the prose preprocessor escapes link-shaped mathematical notation such as
 `mu_H[d](univ)` and standalone powered coefficient expressions such as
-`[X^(m-1)](1-A)^m`. The latter requires a coefficient selector, an algebraic factor and an
+`[X^(m-1)](1-A)^m` or `[X^(m−1)](1−F)^m`, with ASCII or Unicode minus signs.
+The latter requires a coefficient selector, an algebraic factor and an
 immediately following power; URL and file-path characters do not qualify. The transformation
 runs in memory, leaving copied upstream Markdown intact, and preserves code and math regions.
 The release gate still rejects broken relative links.
