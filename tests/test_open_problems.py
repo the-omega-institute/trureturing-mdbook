@@ -790,9 +790,9 @@ class OpenProblemTests(unittest.TestCase):
     def test_rejects_invalid_citations_in_dossier_and_selected_note(self) -> None:
         self.fixture()
         for metadata, diagnostic in (
-            ("doi: null", "exactly one DOI or URL"),
+            ("doi: null", "requires a DOI or URL"),
             ("doi: []\nurl: https://oeis.org/A122399", "invalid DOI"),
-            ("doi: 10.48550/arXiv.2601.12345\nurl: https://oeis.org/A122399", "exactly one DOI or URL"),
+            ("doi: 10.48550/arXiv.2601.12345\nurl: not-a-url", "invalid canonical HTTPS URL"),
             ("doi: null\nurl: null", "url must be a nonempty scalar"),
             ("doi: 'null'\nurl: https://oeis.org/A122399", "invalid DOI"),
             ("url: https://oeis.org/A122399", "schema|metadata keys"),
@@ -805,6 +805,46 @@ class OpenProblemTests(unittest.TestCase):
                     self.write("Problems/alpha.md", self.dossier())
                     self.write("Library/Words/paper2026.md", self.library())
                     self.check_rejected(path, original.replace("doi: 10.48550/arXiv.2601.12345", metadata), diagnostic)
+
+    def test_accepts_doi_and_url_together_and_lists_both_locators(self) -> None:
+        self.fixture(self.marker())
+        url = "https://arxiv.org/abs/2601.12345v2"
+        # alpha repeats both locators; beta gives only the DOI the note also holds.
+        self.write("Problems/alpha.md", self.dossier().replace("triage:", f"url: {url}\ntriage:"))
+        self.write("Library/Words/paper2026.md", self.library().replace("claim:", f"url: {url}\nclaim:"))
+        sha = self.commit("doi and url coexist", "2026-07-08T09:00:00+00:00")
+        result = build_site.build_site(self.upstream, self.output)
+        self.assertEqual(result["upstream_sha"], sha)
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        for slug, theorem in (("alpha", [("`theorem17`", "Blueprint/D5/S1/Example.md")]), ("beta", [])):
+            entry = page.split(f"### Problem {slug}\n", 1)[1].split("\n##", 1)[0]
+            with self.subTest(slug=slug):
+                self.assertEqual(re.findall(r"\[([^\]]+)\]\(([^\n]+?)\)", entry), theorem + [
+                    ("Problem details", f"Problems/{slug}.md"),
+                    ("Reading note", "Library/Words/paper2026.md"),
+                    ("Source", "https://doi.org/10.48550/arXiv.2601.12345"),
+                    ("Source URL", f"<{url}>"),
+                ])
+        self.assertEqual(page.count("[Source URL]"), 2)
+        verified = verify_site.verify(self.upstream, self.output, self.mock_book())
+        self.assertEqual((verified["open_problem_dossiers"], verified["open_problem_markers"]), (2, 1))
+
+    def test_rejects_dossier_locator_the_note_lacks_or_contradicts(self) -> None:
+        self.fixture()
+        both = self.library().replace("claim:", "url: https://arxiv.org/abs/2601.12345v2\nclaim:")
+        for note, metadata in (
+            (self.library(), "doi: 10.48550/arXiv.2601.12345\nurl: https://arxiv.org/abs/2601.12345v2"),
+            (both, "doi: 10.48550/arXiv.2601.12345\nurl: https://arxiv.org/abs/2601.12345v1"),
+            (both, "doi: null\nurl: https://arxiv.org/abs/2601.12345v1"),
+            (both, "doi: 10.48550/arXiv.2601.12346"),
+        ):
+            with self.subTest(note=note, metadata=metadata):
+                self.write("Library/Words/paper2026.md", note)
+                self.check_rejected(
+                    "Problems/alpha.md",
+                    self.dossier().replace("doi: 10.48550/arXiv.2601.12345", metadata),
+                    "citation .* disagrees",
+                )
 
     def test_renders_readable_resource_labels_without_research_categories(self) -> None:
         self.mixed_fixture()

@@ -237,8 +237,8 @@ def citation(fields: Fields, path: bytes) -> tuple[str | None, str | None]:
     url = required_scalar(fields, "url", path) if "url" in fields else None
     if url is not None:
         validate_stable_url(url, label)
-    if (doi is None) == (url is None):
-        raise OpenProblemError(f"{label}: citation requires exactly one DOI or URL")
+    if doi is None and url is None:
+        raise OpenProblemError(f"{label}: citation requires a DOI or URL")
     return doi, url
 
 
@@ -395,7 +395,10 @@ def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) 
         notes[bibkey] = path, doi, url
     for problem in problems:
         path, doi, url = notes[problem.bibkey]
-        if (doi, url) != (problem.doi, problem.url):
+        # The note holds the source identity; every locator a dossier gives must equal the
+        # note's locator of the same kind, while a note may hold locators the dossier omits.
+        if any(given is not None and given != held
+               for given, held in ((problem.doi, doi), (problem.url, url))):
             raise OpenProblemError(
                 f"{os.fsdecode(path)}: citation {(doi, url)!r} disagrees with "
                 f"{os.fsdecode(problem.path)}: citation {(problem.doi, problem.url)!r}"
@@ -427,10 +430,13 @@ def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) 
             note_path, doi, url = notes[problem.bibkey]
             dossier_url = quote_from_bytes(problem.path, safe="/")
             note_url = quote_from_bytes(note_path, safe="/")
-            source_url = ("https://doi.org/" + quote_from_bytes(doi.encode(), safe="/")
-                          if doi is not None else url)
-            # Angle brackets preserve canonical URL punctuation in Markdown destinations.
-            source_target = f"<{source_url}>" if url is not None else source_url
+            # DOI first, then URL, as the upstream citation does. Angle brackets preserve
+            # canonical URL punctuation in Markdown destinations.
+            locators = []
+            if doi is not None:
+                locators.append("[Source](https://doi.org/" + quote_from_bytes(doi.encode(), safe="/") + ")")
+            if url is not None:
+                locators.append(f"[{'Source URL' if doi is not None else 'Source'}](<{url}>)")
             lines.extend([f"### {markdown_text(problem.title)}", ""])
             resolution = resolutions.get(problem.slug)
             if resolution is not None:
@@ -441,10 +447,9 @@ def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) 
                     f"**{label}.** Lean theorem [`{declaration}`]({target}), "
                     f"frozen in this repository {frozen_dates[resolution.path]}.", "",
                 ])
-            lines.extend([
-                f"[Problem details]({dossier_url}) \u00b7 [Reading note]({note_url}) "
-                f"\u00b7 [Source]({source_target})", "",
-            ])
+            lines.extend([" \u00b7 ".join([
+                f"[Problem details]({dossier_url})", f"[Reading note]({note_url})", *locators,
+            ]), ""])
     lines.extend([
         "## How this list is made", "",
         f"Source revision: [`{sha[:8]}`]({UPSTREAM_REPOSITORY}/commit/{sha}).", "",
