@@ -77,11 +77,18 @@ def source_permalink(
     # Preserve local resources and published-page navigation, even if a missing
     # page happens to share a path with an upstream HTML blob. The gate owns
     # missing resources. Do not guess extensions or reinterpret nonexistent paths.
-    published_page = target[:-5] + b".md" if target.endswith(b".html") else target
-    if ((published_page in paths and is_published_path(published_page))
+    markdown_page = target[:-5] + b".md" if target.endswith(b".html") else target
+    if ((markdown_page in paths and is_published_path(markdown_page))
             or (book / os.fsdecode(target)).exists()
-            or raw_path.endswith(b"/") or target not in paths):
+            or raw_path.endswith(b"/")):
         return None
+    if target not in paths:
+        # mdBook renders every relative `x.md` link as `x.html`, so an unpublished
+        # upstream Markdown file arrives under an `.html` name that exists nowhere.
+        # Only that exact upstream `.md` blob is a target; nothing else is guessed.
+        if markdown_page == target or markdown_page not in paths:
+            return None
+        target = markdown_page
     suffix = value[len(parsed.path):]
     return f"{UPSTREAM_REPOSITORY}/blob/{sha}/{quote_from_bytes(target, safe='/')}{suffix}"
 

@@ -150,6 +150,47 @@ class SourceLinksTests(unittest.TestCase):
         with self.assertRaisesRegex(fixtures.verify_site.VerificationError, "broken relative"):
             fixtures.verify_site.validate_links(self.book, [b"embedded.html"])
 
+    def test_unpublished_upstream_markdown_rendered_as_html_by_mdbook_gets_a_blob_permalink(self):
+        # mdBook rewrites relative `x.md` links to `x.html`; an unpublished upstream
+        # Markdown file therefore reaches the renderer under a name that exists nowhere.
+        self.prepare()
+        report = "docs/reports/erdos7/problem-details/01-current-bounds.md"
+        self.write(report, "# Current bounds\n\n## Motivation\n")
+        self.write("docs/reports/pair.md", "markdown twin\n")
+        self.write("docs/reports/pair.html", "html twin\n")
+        self.write("Blueprint/Erdos7.md", f"# Erdős 7\n\n[bounds](../{report}#motivation)\n")
+        sha = self.commit("dossier links an unpublished report", "2026-09-10T01:00:00Z")
+        paths = links.regular_source_paths(self.upstream, sha)
+        html_name = report[:-3] + ".html"
+        for href, page, expected in (
+            (f"../{html_name}#motivation", b"Blueprint/Erdos7.html",
+             f"{links.UPSTREAM_REPOSITORY}/blob/{sha}/{report}#motivation"),
+            (f"{html_name}?plain=1", b"print.html",
+             f"{links.UPSTREAM_REPOSITORY}/blob/{sha}/{report}?plain=1"),
+            # A raw HTML anchor keeps its `.md` name and already resolved before this case.
+            (f"../{report}", b"Blueprint/Erdos7.html", f"{links.UPSTREAM_REPOSITORY}/blob/{sha}/{report}"),
+            # An upstream `.html` blob of the same name still wins, as before.
+            ("../docs/reports/pair.html", b"Blueprint/Erdos7.html",
+             f"{links.UPSTREAM_REPOSITORY}/blob/{sha}/docs/reports/pair.html"),
+            # Neither name exists upstream: still nothing to point at, the gate keeps owning it.
+            ("../docs/reports/absent.html", b"Blueprint/Erdos7.html", None),
+            # A published page that is merely missing from the book is never redirected.
+            ("../Blueprint/Guide.html", b"Blueprint/Erdos7.html", None),
+        ):
+            with self.subTest(href=href):
+                self.assertEqual(links.source_permalink(href, page, self.book, paths, sha), expected)
+        fixtures.build_site.build_site(self.upstream, self.output, upstream_sha=sha)
+        shutil.copyfile(self.output / "provenance.json", self.book / "provenance.json")
+        self.html("Blueprint/Erdos7.html", f'<h1>Erdős 7</h1>\n<a href="../{html_name}#motivation">bounds</a>\n')
+        self.html("print.html", f'<a href="{html_name}#motivation">bounds</a>\n')
+        (self.book / self.chapter).unlink()  # leave only this case's anchors in the book
+        with self.assertRaisesRegex(fixtures.verify_site.VerificationError, r"broken relative resources \(2\)"):
+            fixtures.verify_site.validate_links(self.book, [b"Blueprint/Erdos7.html", b"print.html"])
+        result = links.render_source_links(self.upstream, self.output, self.book)
+        self.assertEqual(result["rewritten_anchors"], 2)
+        self.assertEqual(sorted(result["changed_pages"]), ["Blueprint/Erdos7.html", "print.html"])
+        fixtures.verify_site.validate_links(self.book, [b"Blueprint/Erdos7.html", b"print.html"])
+
     def test_missing_published_page_is_never_redirected_to_an_upstream_html_blob(self):
         self.prepare()
         self.write("Blueprint/Guide.html", "not the published Markdown page\n")
