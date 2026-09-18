@@ -439,6 +439,33 @@ class OpenProblemTests(unittest.TestCase):
         self.fixture(self.marker())
         self.check_rejected("Blueprint/Other.md", self.marker(kind="refuted"), "duplicate.*slug")
 
+    def test_solved_entries_are_listed_newest_freeze_first_then_by_slug(self) -> None:
+        # alpha's module froze first; beta's and gamma's froze together two days later.
+        self.write("Golden/Frozen/state/D5/S1/Example.lean.json", '{"statement_id":"example"}\n')
+        self.commit("freeze Example", "2026-07-03T09:00:00+00:00")
+        self.write("Golden/Frozen/state/D5/S1/Other.lean.json", '{"statement_id":"other"}\n')
+        self.write("Golden/Frozen/state/D5/S1/Third.lean.json", '{"statement_id":"third"}\n')
+        self.commit("freeze Other and Third", "2026-07-05T09:00:00+00:00")
+        self.write("Blueprint/D5/S1/Example.md", "# Example\n\n" + self.marker("alpha"))
+        self.write("Blueprint/D5/S1/Other.md", "# Other\n\n" + self.marker("gamma", "refuted", "D5/S1/Other.counterexample"))
+        self.write("Blueprint/D5/S1/Third.md", "# Third\n\n" + self.marker("beta", "proved", "D5/S1/Third.theorem3"))
+        for slug in ("alpha", "beta", "gamma", "delta"):
+            self.write(f"Problems/{slug}.md", self.dossier(slug))
+        self.write("Library/Words/paper2026.md", self.library())
+        self.commit("three solved, one open", "2026-07-08T09:00:00+00:00")
+        build_site.build_site(self.upstream, self.output)
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        solved = page.split("## Solved (3)\n", 1)[1].split("\n## ", 1)[0]
+        self.assertEqual(re.findall(r"^### (.+)$", solved, re.MULTILINE),
+                         ["Problem beta", "Problem gamma", "Problem alpha"])
+        self.assertEqual(re.findall(r"frozen in this repository (\S+)\.", solved),
+                         ["2026-07-05", "2026-07-05", "2026-07-03"])
+        opened = page.split("## Not solved here (1)\n", 1)[1].split("\n## ", 1)[0]
+        self.assertEqual(re.findall(r"^### (.+)$", opened, re.MULTILINE), ["Problem delta"])
+        footer = page.split("## How this list is made\n", 1)[1]
+        self.assertIn("Solved entries are listed newest freeze first", footer)
+        verify_site.verify(self.upstream, self.output, self.mock_book())
+
     def test_accepts_theorem_order_but_displays_in_dossier_order(self) -> None:
         from scripts.open_problems import parse_markers
 

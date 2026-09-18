@@ -450,14 +450,18 @@ def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) 
         "thing as the source, and a problem with no record here may still have been solved",
         "by someone else.", "",
     ]
-    for heading, solved, count in (
-        ("Solved", True, len(resolutions)),
-        ("Not solved here", False, len(problems) - len(resolutions)),
+    # Solved: newest freeze first; the stable sort keeps slug order within a day.
+    solved_problems = sorted(
+        (problem for problem in problems if problem.slug in resolutions),
+        key=lambda problem: frozen_dates[resolutions[problem.slug].path], reverse=True,
+    )
+    for heading, listed, count in (
+        ("Solved", solved_problems, len(resolutions)),
+        ("Not solved here", [problem for problem in problems if problem.slug not in resolutions],
+         len(problems) - len(resolutions)),
     ):
         lines.extend([f"## {heading} ({count})", ""])
-        for problem in problems:
-            if (problem.slug in resolutions) != solved:
-                continue
+        for problem in listed:
             note = notes[problem.bibkey]
             dossier_url = quote_from_bytes(problem.path, safe="/")
             note_url = quote_from_bytes(note.path, safe="/")
@@ -484,6 +488,7 @@ def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) 
         "The citation and claim of each entry are copied from the reading note's front matter (authors, year, title, DOI or URL, claim). The claim is the note's transcription of the source statement; whether it quotes the source exactly is not checked here.",
         "The records are read as text, so ordinary prose can produce one; this page does not check that a record came from the repository's own verified claim.",
         "This page does not run the repository's checks or verify the named theorems or their Lean proofs.", "",
-        'The "frozen in this repository" date is the date of the first commit that added the theorem\'s module to the frozen record. It is not the date the problem was solved in the world or the resolution was recorded.', "",
+        'The "frozen in this repository" date is the date of the first commit that added the theorem\'s module to the frozen record. It is not the date the problem was solved in the world or the resolution was recorded.',
+        "Solved entries are listed newest freeze first, and by problem slug within a day; unsolved entries are listed by slug.", "",
     ])
     return ProblemPage("\n".join(lines), len(problems), len(resolutions))
