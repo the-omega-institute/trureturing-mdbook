@@ -100,7 +100,8 @@ python3 -m unittest discover -s tests -v
 
 ## External open problems
 
-The generated root page `open-problems.md` lists every `Problems/<slug>.md` dossier with
+The generated root page `open-problems.md` lists every `Problems/<slug>.md` dossier — solved
+ones newest freeze first and by slug within a day, unsolved ones by slug — with
 any matching resolution marker in published Blueprint Markdown, a citation of the source
 and the claim, both copied from the reading note's front matter. The citation has the
 upstream acknowledgement shape — `authors (year). *title*. DOI: […](https://doi.org/…).
