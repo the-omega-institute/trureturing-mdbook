@@ -108,16 +108,22 @@ checks its rendered links. CI runs the Python tests before building the site.
 
 The dossier parser accepts the current closed key set: `slug`, `bibkey`, `doi`,
 `triage`, `motivation_gids`, plus optional `url`. Front matter must use UTF-8 without BOM or CR,
-single-line scalars (plain, double-quoted or single-quoted), and two-space block lists.
-Unsupported YAML syntax, missing or unknown
+single-line scalars, and two-space block lists. A scalar is read the way the upstream
+`YamlSubsetParser` reads it, so that nothing upstream accepts fails here: the remainder of the
+line is trimmed; `null`, `~` and a blank remainder are null; `"…"` is JSON, falling back to the
+raw inner text when it is not valid JSON; `'…'` is the inner text verbatim; anything else,
+including `: `, `#`, quotes and flow characters, is the whole text verbatim. Only block-scalar
+markers (`|`, `>` and their chomping forms), values that are not one canonical non-empty line
+after decoding, and forbidden characters fail. Unsupported YAML syntax, missing or unknown
 keys, duplicate keys, path/slug disagreement, and duplicate or out-of-order dossier
 slugs fail the build. Each bibkey must select exactly one regular Library note with
-the current closed Library key set (also allowing optional `url`), whose citation exactly
-matches the dossier's decoded DOI/URL pair, including case. The `doi` key is required but
-nullable (bare, `null` or `~`); exactly one non-null DOI or URL is required for each dossier
-and its selected note. Non-null DOIs must match `^10\.[0-9]{4,9}/\S+$`; journal DOIs and
-arXiv DOIs are accepted. URLs must already be canonical absolute HTTPS URLs with a host and
-without credentials. The retired `arxiv_id` key is rejected, including alongside `doi`.
+the current closed Library key set (also allowing optional `url`). The note holds the source
+identity: every DOI or URL the dossier gives must equal the note's value of the same kind,
+byte for byte, while the note may hold a locator the dossier omits. The `doi` key is required
+but nullable (bare, `null` or `~`); each dossier and each note needs at least one of a non-null
+DOI and a URL, and may carry both. Non-null DOIs must match `^10\.[0-9]{4,9}/\S+$`; journal
+DOIs and arXiv DOIs are accepted. URLs must already be canonical absolute HTTPS URLs with a
+host and without credentials. The retired `arxiv_id` key is rejected, including alongside `doi`.
 Every Library field except nullable `doi` and `strata_touched` must be a nonempty scalar;
 `strata_touched` may be an empty list (bare or `[]`) or a block list of scalars.
 Dossier `motivation_gids` must still be a nonempty list of unique formal GIDs. Input documents reject

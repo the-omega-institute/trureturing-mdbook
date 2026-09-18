@@ -38,6 +38,8 @@ MARKER_PREFIX = "scribe-open-problem-resolution"
 MARKER_RE = re.compile(r"<!-- scribe-open-problem-resolution-v([0-9]+) (.+) -->")
 # YAML c-printable excludes these ranges; UTF-8 decoding excludes surrogates.
 FORBIDDEN_YAML_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f\ufffe\uffff]")
+# Upstream YamlSubsetParser.IsBlockMarker: a multi-line scalar follows on the next lines.
+BLOCK_SCALAR_MARKERS = {"|", "|-", "|+", ">", ">-", ">+"}
 
 
 class OpenProblemError(RuntimeError):
@@ -120,33 +122,37 @@ def input_blobs(upstream: Path, entries: list[SourceEntry]) -> list[tuple[bytes,
     return blobs
 
 
-def validate_plain_scalar(scalar: str, label: str) -> None:
-    if (not scalar or scalar != scalar.strip() or scalar[0] in "\"'[]{},#&*!>|%@`"
-            or re.match(r"[-?:](?: |$)", scalar)
-            or any(char in scalar for char in "\t\n\r\x85\u2028\u2029\ufeff")
-            or " #" in scalar or ": " in scalar or scalar.endswith(":")):
-        raise OpenProblemError(f"{label}: unsupported front matter scalar")
-
-
 def parse_scalar(scalar: str, label: str) -> str | None:
-    if scalar in {"null", "~"}:
+    """Read one single-line value the way the upstream YamlSubsetParser.Scalar does.
+
+    The remainder of the line is trimmed; ``null``/``~`` and an empty remainder are
+    null; ``"…"`` is JSON, falling back to the raw inner text when it is not valid
+    JSON; ``'…'`` is the inner text verbatim; anything else is the whole text verbatim.
+    Block-scalar markers are the one upstream form this reader cannot represent.
+    Upstream's field rules then require one canonical non-empty line, so a decoded
+    value that is not equal to its own trim, spans lines, or carries a forbidden
+    character is refused here.
+    """
+    scalar = scalar.strip()
+    if scalar in {"", "null", "~"}:
         return None
-    if scalar.startswith('"'):
+    if scalar in BLOCK_SCALAR_MARKERS:
+        raise OpenProblemError(f"{label}: unsupported front matter scalar")
+    if len(scalar) >= 2 and scalar[0] == scalar[-1] == '"':
         try:
             value = json.loads(scalar)
-        except (ValueError, RecursionError) as exc:
-            raise OpenProblemError(f"{label}: unsupported front matter scalar") from exc
-    elif scalar.startswith("'"):
-        if not re.fullmatch(r"'(?:[^']|'')*'", scalar):
-            raise OpenProblemError(f"{label}: unsupported front matter scalar")
-        # The producer's YamlSubsetParser strips single quotes without unescaping.
+        except (ValueError, RecursionError):
+            value = scalar[1:-1]
+        if not isinstance(value, str):
+            value = scalar[1:-1]
+    elif len(scalar) >= 2 and scalar[0] == scalar[-1] == "'":
         value = scalar[1:-1]
     else:
-        validate_plain_scalar(scalar, label)
         return scalar
-    if (scalar != scalar.strip() or not isinstance(value, str) or not value
-            or value != value.strip() or FORBIDDEN_YAML_CHAR_RE.search(value)
-            or any(char in value for char in "\t\n\r\x85\u2028\u2029\ufeff")
+    if value.strip() == "":
+        return None
+    if (value != value.strip() or "\n" in value or "\r" in value
+            or FORBIDDEN_YAML_CHAR_RE.search(value)
             or any(0xD800 <= ord(char) <= 0xDFFF for char in value)):
         raise OpenProblemError(f"{label}: unsupported front matter scalar")
     return value
@@ -190,6 +196,8 @@ def front_matter(path: bytes, blob: bytes) -> tuple[Fields, str]:
         current, scalar = match.groups()
         if current in fields:
             raise OpenProblemError(f"{label}: duplicate front matter key {current}")
+        # Upstream trims the remainder of the line; a blank remainder is no value at all.
+        scalar = scalar.strip() if scalar is not None and scalar.strip() else None
         if scalar is None or scalar == "[]":
             fields[current] = None if scalar is None and current == "doi" else []
             if scalar == "[]":
