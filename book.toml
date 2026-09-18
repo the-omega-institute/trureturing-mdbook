@@ -13,9 +13,10 @@ enable = false
 [preprocessor.escape-pseudo-links]
 command = "python3 scripts/escape_pseudo_links.py"
 after = ["links"]
-before = ["katex"]
+before = ["render-katex"]
 
-[preprocessor.katex]
-after = ["links"]
-throw-on-error = true
-trust = false
+# KaTeX under Node (scripts/katex_render.js, pinned by package-lock.json), not
+# mdbook-katex: its QuickJS runtime overflows on deeply nested formulas.
+[preprocessor.render-katex]
+command = "python3 scripts/render_katex.py"
+after = ["links", "escape-pseudo-links"]

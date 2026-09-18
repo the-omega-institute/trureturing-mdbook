@@ -61,6 +61,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install the pinned KaTeX package
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          npm ci --ignore-scripts --no-audit --no-fund
+          test "$(node -p 'require("katex/package.json").version')" = 0.16.4
+
       - name: Test site generator
         run: python3 -m unittest discover -s tests -v
 
@@ -68,7 +76,7 @@ jobs:
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: ${{ runner.tool_cache }}/trureturing-mdbook-tools
-          key: site-tools-${{ runner.os }}-${{ runner.arch }}-mdbook-0.5.4-katex-0.10.0-pagefind-1.5.2
+          key: site-tools-${{ runner.os }}-${{ runner.arch }}-mdbook-0.5.4-pagefind-1.5.2
 
       - name: Install pinned site tools on cache miss
         shell: bash
@@ -77,11 +85,9 @@ jobs:
           TOOL_ROOT="$RUNNER_TOOL_CACHE/trureturing-mdbook-tools"
           tools_ok=true
           test -x "$TOOL_ROOT/bin/mdbook" || tools_ok=false
-          test -x "$TOOL_ROOT/bin/mdbook-katex" || tools_ok=false
           test -x "$TOOL_ROOT/bin/pagefind_extended" || tools_ok=false
           if [[ "$tools_ok" == true ]]; then
             [[ "$("$TOOL_ROOT/bin/mdbook" --version)" == "mdbook v0.5.4" ]] || tools_ok=false
-            [[ "$("$TOOL_ROOT/bin/mdbook-katex" --version)" == "mdbook-katex 0.10.0" ]] || tools_ok=false
             [[ "$("$TOOL_ROOT/bin/pagefind_extended" --version)" == "pagefind 1.5.2" ]] || tools_ok=false
           fi
           if [[ "$tools_ok" != true ]]; then
@@ -95,8 +101,6 @@ jobs:
               | sha256sum --check --strict
             tar -xzf "$RUNNER_TEMP/mdbook.tar.gz" -C "$TOOL_ROOT/bin"
 
-            cargo install mdbook-katex --version 0.10.0 --locked --root "$TOOL_ROOT"
-
             curl --fail --location --retry 3 --silent --show-error \
               --output "$RUNNER_TEMP/pagefind.tar.gz" \
               https://github.com/Pagefind/pagefind/releases/download/v1.5.2/pagefind_extended-v1.5.2-x86_64-unknown-linux-musl.tar.gz
@@ -105,12 +109,10 @@ jobs:
             tar -xzf "$RUNNER_TEMP/pagefind.tar.gz" -C "$TOOL_ROOT/bin"
           fi
           "$TOOL_ROOT/bin/mdbook" --version
-          "$TOOL_ROOT/bin/mdbook-katex" --version
           "$TOOL_ROOT/bin/pagefind_extended" --version
 
-          # mdBook spawns preprocessors (mdbook-katex) by PATH lookup, not by
-          # absolute path, so the pinned tool directory must be on PATH for
-          # every later step.
+          # Later steps call the pinned tools by name, so the tool directory
+          # must be on PATH.
           echo "$TOOL_ROOT/bin" >> "$GITHUB_PATH"
 
       - name: Fetch captured upstream commit with full immutable history

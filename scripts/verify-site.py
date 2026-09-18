@@ -17,10 +17,12 @@ from urllib.parse import unquote_to_bytes, urlsplit
 
 try:
     from site_freshness import generator_revision, provenance_is_usable
+    from math_scan import math_spans
     from open_problems import PAGE_PATH, OpenProblemError, derive_open_problems
     from source_tree import is_published_path, list_source_entries
 except ModuleNotFoundError:
     from scripts.site_freshness import generator_revision, provenance_is_usable
+    from scripts.math_scan import math_spans
     from scripts.open_problems import PAGE_PATH, OpenProblemError, derive_open_problems
     from scripts.source_tree import is_published_path, list_source_entries
 
@@ -154,97 +156,9 @@ def bytes_path(root: Path, relative: bytes) -> Path:
     return root / os.fsdecode(relative)
 
 
-def unescaped_dollar_count(content: bytes) -> int:
-    count = 0
-    for index, value in enumerate(content):
-        if value != ord("$"):
-            continue
-        backslashes = 0
-        cursor = index - 1
-        while cursor >= 0 and content[cursor] == ord("\\"):
-            backslashes += 1
-            cursor -= 1
-        if backslashes % 2 == 0:
-            count += 1
-    return count
-
-
-def _without_inline_code(line: bytes) -> bytes:
-    result = bytearray()
-    index = 0
-    while index < len(line):
-        if line[index] != ord("`"):
-            result.append(line[index])
-            index += 1
-            continue
-        end = index
-        while end < len(line) and line[end] == ord("`"):
-            end += 1
-        fence = line[index:end]
-        close = line.find(fence, end)
-        if close < 0:
-            return bytes(result)
-        index = close + len(fence)
-    return bytes(result)
-
-
 def markdown_math_token_count(content: bytes) -> int:
-    """Count paired dollar-delimited formulas outside Markdown code fences."""
-    count = 0
-    in_fence: tuple[bytes, int] | None = None
-    math_text: list[bytes] = []
-    for line in content.splitlines():
-        stripped = line.lstrip(b" ")
-        indent = len(line) - len(stripped)
-        fence_match = re.match(rb"(`{3,}|~{3,})(.*)$", stripped) if indent <= 3 else None
-        if fence_match:
-            marker = fence_match.group(1)
-            if in_fence is None:
-                in_fence = (marker[:1], len(marker))
-            elif (
-                marker[:1] == in_fence[0]
-                and len(marker) >= in_fence[1]
-                and not fence_match.group(2).strip()
-            ):
-                in_fence = None
-            continue
-        if in_fence is not None:
-            continue
-        math_text.append(_without_inline_code(line))
-
-    line = b"\n".join(math_text)
-    index = 0
-    while index < len(line):
-        if line[index] != ord("$"):
-            index += 1
-            continue
-        backslashes = 0
-        cursor = index - 1
-        while cursor >= 0 and line[cursor] == ord("\\"):
-            backslashes += 1
-            cursor -= 1
-        if backslashes % 2:
-            index += 1
-            continue
-        delimiter = b"$$" if line[index : index + 2] == b"$$" else b"$"
-        close = index + len(delimiter)
-        line_end = line.find(b"\n", close) if delimiter == b"$" else -1
-        search_end = len(line) if line_end < 0 else line_end
-        while close < search_end:
-            if line[close : close + len(delimiter)] == delimiter:
-                escaped = 0
-                cursor = close - 1
-                while cursor >= 0 and line[cursor] == ord("\\"):
-                    escaped += 1
-                    cursor -= 1
-                if escaped % 2 == 0:
-                    count += 1
-                    index = close + len(delimiter)
-                    break
-            close += 1
-        else:
-            index += len(delimiter)
-    return count
+    """Count the formulas the renderer replaces: the shared scanner's spans."""
+    return len(math_spans(content))
 
 
 def expected_math_pages(source: Path, paths: set[bytes]) -> set[bytes]:
