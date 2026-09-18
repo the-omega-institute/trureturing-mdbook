@@ -100,12 +100,17 @@ python3 -m unittest discover -s tests -v
 
 ## External open problems
 
-The generated root page `open-problems.md` lists every `Problems/<slug>.md` dossier,
-its Library citation (DOI or stable HTTPS URL), and any matching resolution marker
-in published Blueprint Markdown. All three roots are published byte-for-byte and
+The generated root page `open-problems.md` lists every `Problems/<slug>.md` dossier with
+any matching resolution marker in published Blueprint Markdown, a citation of the source
+and the claim, both copied from the reading note's front matter. The citation has the
+upstream acknowledgement shape — `authors (year). *title*. DOI: […](https://doi.org/…).
+URL: <…>.` — with the DOI first and the URL second when the note holds both; the claim is
+the note's one-line transcription of the source statement, not a checked quotation. Field
+text is Markdown-escaped verbatim, so a `$…$` in a claim renders as text, not as math.
+All three roots are published byte-for-byte and
 included in the existing navigation and changelog. Dossier, Library note and theorem
-links are repository-relative Markdown paths that mdBook rewrites to HTML. Source links
-use `doi.org` for a DOI or the recorded URL for sources such as OEIS; the snapshot commit
+links are repository-relative Markdown paths that mdBook rewrites to HTML. The DOI link
+uses `doi.org` and the URL is the recorded one for sources such as OEIS; the snapshot commit
 link remains at GitHub for provenance.
 The global GitHub toolbar shortcut is disabled so it adds no external navigation.
 

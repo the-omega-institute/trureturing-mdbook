@@ -144,7 +144,7 @@ class OpenProblemTests(unittest.TestCase):
             entry,
         )
         self.assertTrue(entry.startswith("\n**Proved.**"))
-        self.assertIn("2026-07-03.\n\n[Problem details]", entry)
+        self.assertIn("2026-07-03.\n\nA\\. Author (2026). *Example paper*. DOI: [10\\.48550\\/arXiv\\.2601\\.12345](https://doi.org/10.48550/arXiv.2601.12345).\n\n**Claim.** An external question\\.\n\n[Problem details]", entry)
         self.assertNotIn("Recorded Markdown marker:", entry)
 
     def test_readme_describes_declaration_name_label_and_unchanged_destination(self) -> None:
@@ -206,8 +206,9 @@ class OpenProblemTests(unittest.TestCase):
         self.assertEqual(
             opened.strip(),
             "### Problem beta\n\n"
-            "[Problem details](Problems/beta.md) \u00b7 [Reading note](Library/Words/paper2026.md) \u00b7 "
-            "[Source](https://doi.org/10.48550/arXiv.2601.12345)",
+            "A\\. Author (2026). *Example paper*. DOI: [10\\.48550\\/arXiv\\.2601\\.12345](https://doi.org/10.48550/arXiv.2601.12345).\n\n"
+            "**Claim.** An external question\\.\n\n"
+            "[Problem details](Problems/beta.md) \u00b7 [Reading note](Library/Words/paper2026.md)",
         )
         limitation = "a problem with no record here may still have been solved by someone else."
         self.assertEqual(" ".join(page.splitlines()).count(limitation), 1)
@@ -227,7 +228,7 @@ class OpenProblemTests(unittest.TestCase):
         self.assertNotIn("**Proved", entry)
         self.assertNotIn("**Solved", entry)
         self.assertTrue(entry.startswith("\n**Refuted.**"))
-        self.assertIn("2026-07-04.\n\n[Problem details]", entry)
+        self.assertIn("2026-07-04.\n\nA\\. Author (2026). *Example paper*. DOI: [10\\.48550\\/arXiv\\.2601\\.12345](https://doi.org/10.48550/arXiv.2601.12345).\n\n**Claim.** An external question\\.\n\n[Problem details]", entry)
         self.assertNotIn("Recorded Markdown marker:", entry)
 
     def test_each_module_uses_its_own_frozen_date(self) -> None:
@@ -316,9 +317,9 @@ class OpenProblemTests(unittest.TestCase):
                               ("beta", ("counterexample", "Other")), ("gamma", None)):
             entry = page.split(f"### Problem {slug}\n", 1)[1].split("\n##", 1)[0]
             expected_links = [
+                ("10\\.48550\\/arXiv\\.2601\\.12345", "https://doi.org/10.48550/arXiv.2601.12345"),
                 ("Problem details", f"Problems/{slug}.md"),
                 ("Reading note", "Library/Words/paper2026.md"),
-                ("Source", "https://doi.org/10.48550/arXiv.2601.12345"),
             ]
             if theorem is not None:
                 expected_links.insert(0, (f"`{theorem[0]}`", f"Blueprint/D5/S1/{theorem[1]}.md"))
@@ -326,7 +327,7 @@ class OpenProblemTests(unittest.TestCase):
                 links = re.findall(r"\[([^\]\n]*)\]\(([^)\n]+)\)", entry)
                 self.assertEqual(links, expected_links)
             for label, target in links:
-                if label == "Source":
+                if target.startswith("https://doi.org/"):
                     continue
                 with self.subTest(slug=slug, label=label):
                     parsed = urlsplit(target)
@@ -745,7 +746,9 @@ class OpenProblemTests(unittest.TestCase):
         self.fixture(doi="10.46298/dmtcs.17199")
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        self.assertEqual(page.count("[Source](https://doi.org/10.46298/dmtcs.17199)"), 2)
+        self.assertEqual(page.count(
+            "A\\. Author (2026). *Example paper*. DOI: [10\\.46298\\/dmtcs\\.17199](https://doi.org/10.46298/dmtcs.17199)."
+        ), 2)
 
     def test_url_only_proved_and_refuted_results_with_exact_citations(self) -> None:
         self.fixture(self.marker("beta", "refuted") + self.marker("alpha"))
@@ -771,13 +774,13 @@ class OpenProblemTests(unittest.TestCase):
         ):
             entry = page.split(f"### Problem {slug}\n", 1)[1].split("\n##", 1)[0]
             self.assertIn(f"**{kind}.** Lean theorem [`theorem17`](Blueprint/D5/S1/Example.md)", entry)
+            self.assertIn(f"\n\nA\\. Author (2026). *Sequence\\: {slug} \\# reference*. URL: <{url}>.\n\n", entry)
             self.assertEqual(re.findall(r"\[([^\]]+)\]\(([^\n]+?)\)", entry), [
                 ("`theorem17`", "Blueprint/D5/S1/Example.md"),
                 ("Problem details", f"Problems/{slug}.md"),
                 ("Reading note", f"Library/Sequences/{bibkey}.md"),
-                ("Source", f"<{url}>"),
             ])
-        self.assertIn("[Source](https://doi.org/10.48550/arXiv.2601.12345)", page)
+        self.assertIn("DOI: [10\\.48550\\/arXiv\\.2601\\.12345](https://doi.org/10.48550/arXiv.2601.12345).", page)
         verified = verify_site.verify(self.upstream, self.output, self.mock_book())
         self.assertEqual((verified["open_problem_dossiers"], verified["open_problem_markers"]), (3, 2))
 
@@ -826,12 +829,11 @@ class OpenProblemTests(unittest.TestCase):
             entry = page.split(f"### Problem {slug}\n", 1)[1].split("\n##", 1)[0]
             with self.subTest(slug=slug):
                 self.assertEqual(re.findall(r"\[([^\]]+)\]\(([^\n]+?)\)", entry), theorem + [
+                    ("10\\.48550\\/arXiv\\.2601\\.12345", "https://doi.org/10.48550/arXiv.2601.12345"),
                     ("Problem details", f"Problems/{slug}.md"),
                     ("Reading note", "Library/Words/paper2026.md"),
-                    ("Source", "https://doi.org/10.48550/arXiv.2601.12345"),
-                    ("Source URL", f"<{url}>"),
                 ])
-        self.assertEqual(page.count("[Source URL]"), 2)
+        self.assertEqual(page.count(f"A\\. Author (2026). *Example paper*. DOI: [10\\.48550\\/arXiv\\.2601\\.12345](https://doi.org/10.48550/arXiv.2601.12345). URL: <{url}>."), 2)
         verified = verify_site.verify(self.upstream, self.output, self.mock_book())
         self.assertEqual((verified["open_problem_dossiers"], verified["open_problem_markers"]), (2, 1))
 
@@ -852,6 +854,41 @@ class OpenProblemTests(unittest.TestCase):
                     "citation .* disagrees",
                 )
 
+    def test_entry_cites_the_reading_note_verbatim_with_markdown_escaped(self) -> None:
+        self.fixture(self.marker())
+        note = self.library().replace(
+            "authors: A. Author", "authors: 'Ada *Lovelace*; Bob_[Babbage]'",
+        ).replace(
+            "title: Example paper", 'title: "OEIS A000001, Expansion of (1-x)^(-1)/(1-x-2*x^2) <draft>"',
+        ).replace(
+            "claim: An external question.", "claim: 'Conjecture: $a(n) = tau(n) + tau(n-1) - 2$ for n>=2 | see %F'",
+        ).replace("year: 2026", "year: 1999")
+        self.write("Library/Words/paper2026.md", note)
+        self.commit("citation fields with Markdown punctuation", "2026-07-08T09:00:00+00:00")
+        build_site.build_site(self.upstream, self.output)
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        citation = (
+            "Ada \\*Lovelace\\*\\; Bob\\_\\[Babbage\\] (1999). "
+            "*OEIS A000001\\, Expansion of \\(1\\-x\\)\\^\\(\\-1\\)\\/\\(1\\-x\\-2\\*x\\^2\\) \\<draft\\>*. "
+            "DOI: [10\\.48550\\/arXiv\\.2601\\.12345](https://doi.org/10.48550/arXiv.2601.12345)."
+        )
+        claim = "**Claim.** Conjecture\\: \\$a\\(n\\) \\= tau\\(n\\) \\+ tau\\(n\\-1\\) \\- 2\\$ for n\\>\\=2 \\| see \\%F"
+        for slug, status in (("alpha", "**Proved.** Lean theorem [`theorem17`](Blueprint/D5/S1/Example.md), "
+                                       "frozen in this repository 2026-07-03.\n\n"), ("beta", "")):
+            with self.subTest(slug=slug):
+                self.assertIn(
+                    f"### Problem {slug}\n\n{status}{citation}\n\n{claim}\n\n"
+                    f"[Problem details](Problems/{slug}.md) \u00b7 [Reading note](Library/Words/paper2026.md)\n",
+                    page,
+                )
+        self.assertEqual(verify_site.markdown_math_token_count(page.encode("utf-8")), 0)
+        footer = page.split("## How this list is made\n", 1)[1]
+        self.assertIn("The citation and claim of each entry are copied from the reading note's front matter", footer)
+        # The mock book renders no KaTeX; the fixture note's own page carries the claim's `$…$`.
+        book = self.mock_book()
+        (book / "Library/Words/paper2026.html").write_bytes(b"<h1>Fixture</h1>" + verify_site.KATEX_MARKER)
+        verify_site.verify(self.upstream, self.output, book)
+
     def test_renders_readable_resource_labels_without_research_categories(self) -> None:
         self.mixed_fixture()
         build_site.build_site(self.upstream, self.output)
@@ -859,8 +896,7 @@ class OpenProblemTests(unittest.TestCase):
         for slug in ("alpha", "beta", "gamma"):
             with self.subTest(slug=slug):
                 self.assertIn(
-                    f"[Problem details](Problems/{slug}.md) \u00b7 [Reading note](Library/Words/paper2026.md) \u00b7 "
-                    "[Source](https://doi.org/10.48550/arXiv.2601.12345)",
+                    f"[Problem details](Problems/{slug}.md) \u00b7 [Reading note](Library/Words/paper2026.md)\n",
                     page,
                 )
         for removed in ("triage", "research category", "`window`", "`wall`", "`theorem`"):
@@ -911,7 +947,10 @@ class OpenProblemTests(unittest.TestCase):
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
         self.assertIn("**0 of 3 solved in this repository.**", page)
         opened = page.split("## Not solved here (3)\n", 1)[1].split("\n## ", 1)[0]
-        self.assertIn("### Problem gamma\n\n[Problem details](Problems/gamma.md)", opened)
+        self.assertIn(
+            "### Problem gamma\n\nA\\. Author (2026). *Example paper*. DOI: [10\\.48550\\/arXiv\\.2601\\.12345](https://doi.org/10.48550/arXiv.2601.12345).\n\n**Claim.** An external question\\.\n\n[Problem details](Problems/gamma.md)",
+            opened,
+        )
         self.assertNotIn("`theorem`", page)
 
     def test_dossier_without_optional_h1_uses_slug_and_still_renders_resolution(self) -> None:

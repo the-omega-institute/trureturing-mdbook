@@ -58,6 +58,28 @@ class Problem:
 
 
 @dataclass(frozen=True)
+class Note:
+    """The reading note's front matter: the source identity every entry cites."""
+    path: bytes
+    authors: str
+    year: str
+    title: str
+    doi: str | None
+    url: str | None
+    claim: str
+
+    def citation(self) -> str:
+        # Same shape as the upstream Scribe acknowledgement: authors (year). *title*. DOI. URL.
+        parts = [f"{markdown_text(self.authors)} ({markdown_text(self.year)}). *{markdown_text(self.title)}*."]
+        if self.doi is not None:
+            parts.append("DOI: [" + markdown_text(self.doi) + "](https://doi.org/"
+                         + quote_from_bytes(self.doi.encode(), safe="/") + ").")
+        if self.url is not None:
+            parts.append(f"URL: <{self.url}>.")
+        return " ".join(parts)
+
+
+@dataclass(frozen=True)
 class Resolution:
     kind: str
     declaration_gid: str
@@ -400,15 +422,16 @@ def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) 
         if required_scalar(fields, "bibkey", path) != bibkey:
             raise OpenProblemError(f"{os.fsdecode(path)}: bibkey/path mismatch")
         doi, url = citation(fields, path)
-        notes[bibkey] = path, doi, url
+        notes[bibkey] = Note(path, fields["authors"], fields["year"], fields["title"], doi, url,
+                             fields["claim"])
     for problem in problems:
-        path, doi, url = notes[problem.bibkey]
+        note = notes[problem.bibkey]
         # The note holds the source identity; every locator a dossier gives must equal the
         # note's locator of the same kind, while a note may hold locators the dossier omits.
         if any(given is not None and given != held
-               for given, held in ((problem.doi, doi), (problem.url, url))):
+               for given, held in ((problem.doi, note.doi), (problem.url, note.url))):
             raise OpenProblemError(
-                f"{os.fsdecode(path)}: citation {(doi, url)!r} disagrees with "
+                f"{os.fsdecode(note.path)}: citation {(note.doi, note.url)!r} disagrees with "
                 f"{os.fsdecode(problem.path)}: citation {(problem.doi, problem.url)!r}"
             )
     blueprint = [entry for entry in entries
@@ -435,16 +458,9 @@ def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) 
         for problem in problems:
             if (problem.slug in resolutions) != solved:
                 continue
-            note_path, doi, url = notes[problem.bibkey]
+            note = notes[problem.bibkey]
             dossier_url = quote_from_bytes(problem.path, safe="/")
-            note_url = quote_from_bytes(note_path, safe="/")
-            # DOI first, then URL, as the upstream citation does. Angle brackets preserve
-            # canonical URL punctuation in Markdown destinations.
-            locators = []
-            if doi is not None:
-                locators.append("[Source](https://doi.org/" + quote_from_bytes(doi.encode(), safe="/") + ")")
-            if url is not None:
-                locators.append(f"[{'Source URL' if doi is not None else 'Source'}](<{url}>)")
+            note_url = quote_from_bytes(note.path, safe="/")
             lines.extend([f"### {markdown_text(problem.title)}", ""])
             resolution = resolutions.get(problem.slug)
             if resolution is not None:
@@ -455,14 +471,17 @@ def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) 
                     f"**{label}.** Lean theorem [`{declaration}`]({target}), "
                     f"frozen in this repository {frozen_dates[resolution.path]}.", "",
                 ])
-            lines.extend([" \u00b7 ".join([
-                f"[Problem details]({dossier_url})", f"[Reading note]({note_url})", *locators,
-            ]), ""])
+            lines.extend([
+                note.citation(), "",
+                f"**Claim.** {markdown_text(note.claim)}", "",
+                f"[Problem details]({dossier_url}) \u00b7 [Reading note]({note_url})", "",
+            ])
     lines.extend([
         "## How this list is made", "",
         f"Source revision: [`{sha[:8]}`]({UPSTREAM_REPOSITORY}/commit/{sha}).", "",
         *([snapshot_freshness(built_at), ""] if built_at is not None else []),
         "The list is generated from problem files, reading notes, and resolution records in theorem pages at this source revision.",
+        "The citation and claim of each entry are copied from the reading note's front matter (authors, year, title, DOI or URL, claim). The claim is the note's transcription of the source statement; whether it quotes the source exactly is not checked here.",
         "The records are read as text, so ordinary prose can produce one; this page does not check that a record came from the repository's own verified claim.",
         "This page does not run the repository's checks or verify the named theorems or their Lean proofs.", "",
         'The "frozen in this repository" date is the date of the first commit that added the theorem\'s module to the frozen record. It is not the date the problem was solved in the world or the resolution was recorded.', "",
