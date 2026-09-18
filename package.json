@@ -1,0 +1,8 @@
+{
+  "name": "trureturing-mdbook",
+  "private": true,
+  "description": "Pinned KaTeX for scripts/render_katex.py; no other runtime dependency.",
+  "dependencies": {
+    "katex": "0.16.4"
+  }
+}

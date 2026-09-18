@@ -19,7 +19,7 @@ regular `Blueprint/**/*.md`, `Problems/*.md` and `Library/**/*.md` blobs from th
 and derives the navigation, the home page, an
 external open problems page, a first-parent changelog covering the last 30 dates with changes,
 and a provenance record. It then
-builds with pinned mdBook, mdbook-katex and Pagefind Extended, and deploys only after the source
+builds with pinned mdBook, KaTeX under Node and Pagefind Extended, and deploys only after the source
 set, page mapping, math output, relative links and artifact size all pass their gates.
 
 Nothing derived is committed. The upstream checkout, the projected source tree, `SUMMARY.md`, the
@@ -40,9 +40,10 @@ group; production runs are serialized. No upstream dispatcher or additional secr
 
 ## Local build
 
-Requires Python 3.10 or later, Git, mdBook 0.5.4, mdbook-katex 0.10.0 and Pagefind Extended 1.5.2:
+Requires Python 3.10 or later, Git, Node 18 or later, mdBook 0.5.4 and Pagefind Extended 1.5.2:
 
 ```sh
+npm ci --ignore-scripts --no-audit --no-fund
 SITE_SRC="$(mktemp -d)"
 python3 scripts/build-site.py /path/to/trureturing "$SITE_SRC"
 MDBOOK_BOOK__SRC="$SITE_SRC" mdbook build --dest-dir book
@@ -54,6 +55,13 @@ python3 scripts/verify-site.py /path/to/trureturing "$SITE_SRC" book
 To reproduce a captured snapshot even if upstream HEAD has moved, add
 `--upstream-sha <full-commit-SHA>` to `build-site.py`. The checkout must contain that commit's
 complete history, including frozen-state additions.
+
+Formulas are rendered by `scripts/render_katex.py`, an mdBook preprocessor that finds every
+`$…$` and `$$…$$` span with the same scanner the verifier counts with (`scripts/math_scan.py`)
+and renders them all in one Node process with the KaTeX package pinned in `package-lock.json`.
+It replaced mdbook-katex, whose embedded QuickJS runtime has a 256 KiB stack: a theorem page
+with a few hundred nested `\left…\right` groups made it keep the source text, which the
+release gate then refused. A formula KaTeX rejects fails the build and names the page.
 
 Before rendering, the prose preprocessor escapes link-shaped mathematical notation such as
 `mu_H[d](univ)` and standalone powered coefficient expressions such as
