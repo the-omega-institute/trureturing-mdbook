@@ -608,15 +608,21 @@ class OpenProblemTests(unittest.TestCase):
             self.assertIsInstance(caught.exception.__cause__, verify_site.OpenProblemError)
         self.assertEqual(snapshot(), original)
 
-    def test_rejects_library_scalar_mapping_without_replacing_projection(self) -> None:
-        self.check_library_rejected_without_replacement(
-            "title: Example paper", "title: Example: broken",
-        )
-
-    def test_rejects_library_flow_list_without_replacing_projection(self) -> None:
-        self.check_library_rejected_without_replacement(
-            "  - D5/S1/Example", "  - [unterminated",
-        )
+    def test_accepts_library_scalars_that_upstream_accepts_verbatim(self) -> None:
+        # 2026-09-17: `title: Egg Drop Problems: They Are All They Are Cracked Up To Be!`
+        # landed upstream and this reader refused the `: ` inside a plain scalar.
+        self.fixture()
+        note = self.library().replace(
+            "title: Example paper", "title: Egg Drop Problems: They Are All They Are Cracked Up To Be!",
+        ).replace("  - D5/S1/Example", "  - [unterminated")
+        self.write("Library/Words/paper2026.md", note)
+        sha = self.commit("plain scalars upstream accepts", "2026-07-08T09:00:00+00:00")
+        result = build_site.build_site(self.upstream, self.output)
+        self.assertEqual(result["upstream_sha"], sha)
+        self.assertEqual((self.output / "Library/Words/paper2026.md").read_bytes(), note.encode())
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        self.assertIn("**0 of 2 solved in this repository.**", page)
+        self.assertEqual(page.count("[Reading note](Library/Words/paper2026.md)"), 2)
 
     def test_rejects_library_empty_title_without_replacing_projection(self) -> None:
         self.check_library_rejected_without_replacement(
@@ -966,16 +972,36 @@ class FrontMatterTests(unittest.TestCase):
             fields, _ = front_matter(b"note.md", f"---\ndoi:{' ' + raw if raw else ''}\n---\n".encode())
             self.assertIsNone(fields["doi"])
 
-    def test_malformed_or_noncanonical_quoted_scalars_fail(self) -> None:
+    def test_quoted_scalars_decode_as_upstream_does(self) -> None:
+        # Upstream YamlSubsetParser.Scalar: "…" is JSON, falling back to the raw inner text;
+        # '…' is the inner text verbatim; anything else is the whole value verbatim.
+        from scripts.open_problems import front_matter
+
+        for raw, expected in (('"unclosed', '"unclosed'), ("'unclosed", "'unclosed"),
+                              ('"value" trailing', '"value" trailing'), ("'value' trailing", "'value' trailing"),
+                              ("'val'ue'", "val'ue"), ("'it''s'", "it''s"), ('"bad\\q"', "bad\\q"),
+                              ('"tab\\tvalue"', "tab\tvalue"), ('"\\ufeff"', "\ufeff"),
+                              ('"caf\\u00e9"', "caf\u00e9"), ('"a: b # c"', "a: b # c")):
+            for line in (f"title: {raw}", f"strata_touched:\n  - {raw}"):
+                with self.subTest(line=line):
+                    fields, _ = front_matter(b"note.md", f"---\n{line}\n---\n".encode())
+                    self.assertEqual(next(iter(fields.values())), expected if line.startswith("title") else [expected])
+
+    def test_quoted_scalars_that_cannot_be_one_canonical_line_fail(self) -> None:
+        # Upstream LibraryNoteCatalog.RequiredLine: one non-empty line equal to its trim.
         from scripts.open_problems import OpenProblemError, front_matter
 
-        for raw in ('"unclosed', "'unclosed", '"value" trailing', "'value' trailing",
-                    "'val'ue'", '"bad\\q"', '"line\\nfeed"', '"tab\\tvalue"',
-                    '"\\u0000"', '"\\ud800"', '"\\u2028"', '"\\ufeff"',
-                    '" leading"', "'trailing '", '""', "''"):
+        for raw in ('"line\\nfeed"', '"\\u0000"', '"\\ud800"', '"\\u007f"',
+                    '" leading"', "'trailing '"):
             for line in (f"title: {raw}", f"strata_touched:\n  - {raw}"):
                 with self.subTest(line=line), self.assertRaises(OpenProblemError):
                     front_matter(b"note.md", f"---\n{line}\n---\n".encode())
+        for raw in ('""', "''", '"\\u2028"', "'   '", '"\\t"'):
+            with self.subTest(raw=raw):
+                # An empty value is null, as upstream reads `key:`; the field rules refuse it later.
+                self.assertEqual(front_matter(b"note.md", f"---\ntitle: {raw}\n---\n".encode())[0], {"title": None})
+                with self.assertRaisesRegex(OpenProblemError, "unsupported front matter scalar"):
+                    front_matter(b"note.md", f"---\nstrata_touched:\n  - {raw}\n---\n".encode())
 
     def test_canonical_https_citations(self) -> None:
         from scripts.open_problems import OpenProblemError, validate_stable_url
@@ -994,17 +1020,17 @@ class FrontMatterTests(unittest.TestCase):
             with self.subTest(url=url), self.assertRaisesRegex(OpenProblemError, "canonical HTTPS URL"):
                 validate_stable_url(url, "test")
 
-    def test_rejects_unsupported_scalar_syntax_in_fields_and_lists(self) -> None:
+    def test_rejects_block_scalar_markers_in_fields_and_lists(self) -> None:
+        # Upstream reads these as multi-line block scalars; this reader does not represent them.
         from scripts.open_problems import OpenProblemError, front_matter
 
-        for scalar in (
-            "", " leading", "trailing ", "Example # comment", "Example: broken",
-            *(prefix + "value" for prefix in "\"'[{&*!>|"),
-        ):
-            for line in (f"value: {scalar}", f"value:\n  - {scalar}"):
+        for scalar in ("|", "|-", "|+", ">", ">-", ">+"):
+            for line in (f"value: {scalar}", f"value:\n  - {scalar}", f"value: {scalar}\n  folded text"):
                 with self.subTest(line=line):
                     with self.assertRaisesRegex(OpenProblemError, "front matter"):
                         front_matter(b"Library/Words/paper2026.md", f"---\n{line}\n---\n".encode())
+        with self.assertRaisesRegex(OpenProblemError, "unsupported front matter scalar"):
+            front_matter(b"note.md", b"---\nvalue:\n  - \n---\n")
 
         with self.assertRaisesRegex(OpenProblemError, "malformed front matter list"):
             front_matter(b"note.md", b"---\nvalue: scalar\n  - item\n---\n")
@@ -1016,6 +1042,14 @@ class FrontMatterTests(unittest.TestCase):
             "Example paper", "10.48550/arXiv.2601.12345", "D5/S1/Example", "2026", "C#",
             "-word", "?word", ":word", "a:b", "embedded [brackets], {braces}",
             "---", "...", "true", "caf\u00e9", "\u4e2d\u6587", "\U0001f600",
+            # Verbatim as upstream YamlSubsetParser reads them (2026-09-17 outage: `: ` in a title).
+            "Egg Drop Problems: They Are All They Are Cracked Up To Be!",
+            "Profinite rigidity of graph manifolds, II: knots and mapping classes",
+            "Example # comment", "Example:", "#comment", "- nested", "? key", ": value",
+            "-", "?", ":", "[unterminated", "{unterminated", "]value", "}value", ",value",
+            "%value", "@value", "`value", "&value", "*value", "!value", ">value", "|value",
+            "Example\ttext", "Example:\tbroken", "Example\u0085text", "Example\u2028text",
+            "Example\u2029text", "Example\ufefftext",
         ):
             with self.subTest(scalar=scalar):
                 fields, body = front_matter(
@@ -1023,44 +1057,17 @@ class FrontMatterTests(unittest.TestCase):
                 )
                 self.assertEqual(fields, {"scalar": scalar, "list": [scalar]})
                 self.assertEqual(body, "body\n")
+        # Surrounding blanks are trimmed, as upstream trims the remainder of the line.
+        fields, _ = front_matter(b"note.md", b"---\nscalar:  padded  \nlist:\n  -  padded  \n---\n")
+        self.assertEqual(fields, {"scalar": "padded", "list": ["padded"]})
 
 
 # Each payload gets a discoverable end-to-end test in both scalar branches.
 SCALAR_REJECTION_CASES = {
-    "flow_sequence": "[unterminated",
-    "flow_mapping": "{unterminated",
-    "mapping_separator": "Example: broken",
-    "trailing_colon": "Example:",
-    "comment_only": "#comment",
-    "inline_comment": "Example # comment",
-    "nested_sequence": "- nested",
-    "explicit_key": "? key",
-    "explicit_value": ": value",
-    "bare_sequence_indicator": "-",
-    "bare_key_indicator": "?",
-    "bare_value_indicator": ":",
-    "flow_sequence_end": "]value",
-    "flow_mapping_end": "}value",
-    "flow_comma": ",value",
-    "directive": "%value",
-    "reserved_at": "@value",
-    "reserved_backtick": "`value",
-    "unclosed_single_quote": "'value",
-    "unclosed_double_quote": '"value',
-    "anchor": "&value",
-    "alias": "*value",
-    "tag": "!value",
-    "folded_block": ">value",
-    "literal_block": "|value",
-    "tab": "Example\ttext",
-    "tab_mapping": "Example:\tbroken",
-    "tab_comment": "Example\t#comment",
-    "next_line": "Example\u0085text",
-    "line_separator": "Example\u2028text",
-    "paragraph_separator": "Example\u2029text",
-    "embedded_bom": "Example\ufefftext",
-    "leading_space": " leading",
-    "trailing_space": "trailing ",
+    "literal_block": "|",
+    "folded_block": ">",
+    "keep_block": "|+",
+    "strip_folded_block": ">-",
 }
 LIBRARY_STRUCTURE_REJECTIONS = {
     "empty_item": ("  - D5/S1/Example", "  - ", "unsupported front matter scalar"),
@@ -1073,6 +1080,7 @@ LIBRARY_STRUCTURE_REJECTIONS = {
     "list_after_scalar": ("title: Example paper", "title: Example\n  - extra", "malformed front matter list"),
     "duplicate_key": ("title: Example paper", "title: Example\ntitle: Duplicate", "duplicate front matter key title"),
     "space_only_title": ("title: Example paper", "title: ", "unsupported front matter syntax"),
+    "blank_title": ("title: Example paper", "title:  ", "title must be a nonempty scalar"),
     "list_title": ("title: Example paper", "title:\n  - Example", "title must be a nonempty scalar"),
 }
 FORBIDDEN_YAML_CODEPOINTS = (
