@@ -191,6 +191,30 @@ def direct_children(
     return sorted(children, key=lambda item: (item[0], not item[1]))
 
 
+def menu_chain(
+    directory: bytes,
+    directories: set[bytes],
+    entries: list[SourceEntry],
+) -> tuple[list[bytes], bytes]:
+    """Follow single-subdirectory links: ``Blueprint`` → ``D5`` → ``S0`` is one menu entry.
+
+    Returns the directories folded into the entry and the last of them, whose
+    children the entry lists. A directory that also holds a page, or more than
+    one subdirectory, ends the chain.
+    """
+    chain = [directory]
+    while True:
+        children = direct_children(directory, directories, entries)
+        if len(children) != 1 or not children[0][1]:
+            return chain, directory
+        directory = children[0][0]
+        chain.append(directory)
+
+
+def menu_label(chain: list[bytes]) -> str:
+    return " / ".join(display_path(posixpath.basename(directory)) for directory in chain)
+
+
 def build_summary(
     entries: list[SourceEntry],
     titles: dict[bytes, str],
@@ -205,9 +229,10 @@ def build_summary(
     ]
 
     def add_directory(directory: bytes, depth: int) -> None:
-        label = display_path(posixpath.basename(directory))
+        chain, directory = menu_chain(directory, directories, entries)
         lines.append(
-            f"{'  ' * depth}- [{markdown_text(label)}]({markdown_path(nav_path(directory))})"
+            f"{'  ' * depth}- [{markdown_text(menu_label(chain))}]"
+            f"({markdown_path(nav_path(directory))})"
         )
         for child, is_directory in direct_children(directory, directories, entries):
             if is_directory:
@@ -231,8 +256,9 @@ def build_nav_page(
     entries: list[SourceEntry],
     titles: dict[bytes, str],
     sha: str,
+    label: str | None = None,
 ) -> str:
-    label = display_path(posixpath.basename(directory))
+    label = display_path(posixpath.basename(directory)) if label is None else label
     current_nav = nav_path(directory)
     start = posixpath.dirname(current_nav)
     lines = [
@@ -247,7 +273,13 @@ def build_nav_page(
         for child, is_directory in children:
             target = nav_path(child) if is_directory else child
             relative = posixpath.relpath(target, start=start)
-            title = display_path(posixpath.basename(child)) if is_directory else titles[child]
+            if is_directory:
+                chain, leaf = menu_chain(child, directories, entries)
+                target = nav_path(leaf)
+                relative = posixpath.relpath(target, start=start)
+                title = menu_label(chain)
+            else:
+                title = titles[child]
             lines.append(f"- [{markdown_text(title)}]({markdown_path(relative)})")
     else:
         lines.append("This directory has no publishable Markdown pages in the current snapshot.")
@@ -458,11 +490,18 @@ def write_projection(
         ),
         encoding="utf-8",
     )
+    # One navigation page per menu entry: a directory folded into a chain has none.
+    folded: set[bytes] = set()
+    labels: dict[bytes, str] = {}
     for directory in sorted(directories):
+        chain, leaf = menu_chain(directory, directories, entries)
+        folded.update(chain[:-1])
+        labels.setdefault(leaf, menu_label(chain))
+    for directory in sorted(directories - folded):
         destination = staging / decode_path(nav_path(directory))
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(
-            build_nav_page(directory, directories, entries, titles, sha),
+            build_nav_page(directory, directories, entries, titles, sha, labels[directory]),
             encoding="utf-8",
         )
 

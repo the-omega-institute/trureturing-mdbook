@@ -201,6 +201,54 @@ class BuildSiteTests(unittest.TestCase):
         )
         self.assertEqual(build_site.safe_output_path(self.upstream, existing), existing.resolve())
 
+    def test_single_child_directory_chains_collapse_into_one_menu_entry(self) -> None:
+        # Blueprint/D5/S0/… is the only content under Blueprint and D5, so the menu
+        # should not spend two levels on "Blueprint" and "D5" before anything readable.
+        self.write("Blueprint/D5/S0/Deep/Page.md", "# Deep page\n")
+        self.write("Blueprint/D5/S0/Top.md", "# Top page\n")
+        self.write("Library/Words/note.md", "# Note\n")
+        self.commit("chains", "2026-07-03T09:00:00+00:00")
+        build_site.build_site(self.upstream, self.output)
+        summary = (self.output / "SUMMARY.md").read_text(encoding="utf-8")
+        leaf = build_site.nav_path(b"Blueprint/D5/S0").decode()
+        self.assertEqual(summary.split("- [External open problems](open-problems.md)\n", 1)[1], (
+            f"- [Blueprint / D5 / S0]({leaf})\n"
+            f"  - [Deep]({build_site.nav_path(b'Blueprint/D5/S0/Deep').decode()})\n"
+            "    - [Deep page](Blueprint/D5/S0/Deep/Page.md)\n"
+            "  - [Top page](Blueprint/D5/S0/Top.md)\n"
+            f"- [Library / Words]({build_site.nav_path(b'Library/Words').decode()})\n"
+            "  - [Note](Library/Words/note.md)\n"
+        ))
+        for skipped in (b"Blueprint", b"Blueprint/D5", b"Library"):
+            self.assertFalse((self.output / os.fsdecode(build_site.nav_path(skipped))).exists(), skipped)
+        page = (self.output / leaf).read_text(encoding="utf-8")
+        self.assertTrue(page.startswith("# Blueprint / D5 / S0\n\nNavigation page for `Blueprint/D5/S0/`"))
+        self.assertIn("- [Deep](" + build_site.nav_path(b"Blueprint/D5/S0/Deep").decode().removeprefix("_nav/") + ")", page)
+        self.assertIn("- [Top page](../Blueprint/D5/S0/Top.md)", page)
+        book = self.root / "book"
+        book.mkdir()
+        (book / "provenance.json").write_bytes((self.output / "provenance.json").read_bytes())
+        (book / "open-problems.html").write_text("<h1>External open problems</h1>\n", encoding="utf-8")
+        for path in ("Blueprint/D5/S0/Deep/Page.md", "Blueprint/D5/S0/Top.md", "Library/Words/note.md"):
+            destination = book / (path[:-3] + ".html")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text("<h1>x</h1>", encoding="utf-8")
+        verify_site.verify(self.upstream, self.output, book)
+
+    def test_a_directory_with_a_page_and_a_subdirectory_keeps_its_own_menu_entry(self) -> None:
+        self.make_fixture()
+        build_site.build_site(self.upstream, self.output)
+        summary = (self.output / "SUMMARY.md").read_text(encoding="utf-8")
+        self.assertIn(f"- [Blueprint]({build_site.nav_path(b'Blueprint').decode()})\n", summary)
+        self.assertNotIn("Blueprint / Part", summary)
+
+    def test_book_menu_folds_by_default_and_shows_no_section_numbers(self) -> None:
+        book_toml = (ROOT / "book.toml").read_text(encoding="utf-8")
+        self.assertIn("no-section-label = true", book_toml)
+        fold = book_toml.split("[output.html.fold]", 1)[1].split("\n[", 1)[0]
+        self.assertIn("enable = true", fold)
+        self.assertIn("level = 0", fold)
+
     def test_nav_encoding_is_flat_and_injective_for_md_named_directories(self) -> None:
         first = build_site.nav_path(b"Blueprint/Foo")
         second = build_site.nav_path(b"Blueprint/Foo.md/Bar")
@@ -488,12 +536,14 @@ class PublicationRootsTests(unittest.TestCase):
                 self.assertIn(f"]({relative})", summary)
                 self.assertIn(f"]({relative})", changelog)
         for directory, child in ((b"Problems", "../Problems/alpha.md"),
-                                 (b"Library", build_site.nav_path(b"Library/Words").decode().removeprefix("_nav/")),
                                  (b"Library/Words", "../Library/Words/paper2026.md"),
                                  (b"Library/Words/Nested", "../Library/Words/Nested/context.md")):
             navigation = build_site.nav_path(directory).decode()
             self.assertIn(f"]({navigation})", summary)
             self.assertIn(f"]({child})", (self.output / navigation).read_text(encoding="utf-8"))
+        # Library holds only Words, so the two fold into one menu entry.
+        self.assertIn(f"- [Library / Words]({build_site.nav_path(b'Library/Words').decode()})", summary)
+        self.assertFalse((self.output / build_site.nav_path(b"Library").decode()).exists())
 
     def check_blob_tampering_rejected(self, relative: str) -> None:
         self.fixture()
