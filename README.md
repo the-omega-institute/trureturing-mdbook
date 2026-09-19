@@ -16,7 +16,9 @@ provenance in place, so later checks retry. Main pushes and manual runs always r
 
 The build fetches exactly that captured commit with full history, publishes only the
 regular `Blueprint/**/*.md`, `Problems/*.md` and `Library/**/*.md` blobs from that tree,
-and derives the navigation, the home page, an
+and derives the navigation (a folded menu without section numbers, where a directory
+whose only content is one subdirectory shares the entry of that subdirectory, so
+`Blueprint / D5` is one entry), the home page, an
 external open problems page, a first-parent changelog covering the last 30 dates with changes,
 and a provenance record. It then
 builds with pinned mdBook, KaTeX under Node and Pagefind Extended, and deploys only after the source
@@ -142,16 +144,11 @@ Every Library field except nullable `doi` and `strata_touched` must be a nonempt
 `strata_touched` may be an empty list (bare or `[]`) or a block list of scalars.
 Dossier `motivation_gids` must still be a nonempty list of unique formal GIDs. Input documents reject
 YAML-forbidden control characters, including NUL, even outside the front matter.
-The reader implements a restricted text format, not general YAML: scalar values
-must occupy one line without tabs, Unicode line breaks, embedded BOM, leading or
-trailing whitespace. Plain scalars cannot contain comments or mapping separators
-(including a final colon). Quoted scalars can contain such punctuation; double-quoted
-values decode JSON string escapes, and single-quoted contents remain literal, matching the
-producer's subset parser. Malformed quotes and decoded noncanonical text fail the build.
-Tags, anchors, aliases, nonempty flow collections, block scalars, reserved
-leading plain indicators, and nested lists or mappings are unsupported. Punctuation
-inside block-context text such as `C#`, `a:b`, and `text [with brackets]` is retained.
-Numbers and booleans remain text; unquoted `null` and `~` represent null.
+The reader implements the producer's line format, not general YAML: one `key: value`
+per line, scalar values read as described above, and two-space block lists. Block
+scalars, nested lists or mappings, and decoded values that are not one canonical
+non-empty line are unsupported. Numbers and booleans remain text; unquoted `null` and
+`~` represent null.
 An H1 dossier title is optional in the producer contract. The page uses the dossier slug
 when absent, matching navigation; empty or multiple H1 titles are rejected.
 

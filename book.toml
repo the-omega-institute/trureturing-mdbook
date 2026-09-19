@@ -6,6 +6,13 @@ src = "src"
 [output.html]
 default-theme = "light"
 site-url = "/trureturing-mdbook/"
+# Thousands of pages: no "4.1.1.1." numbering, and the menu opens one level at a
+# time (the current page's ancestors are opened for it).
+no-section-label = true
+
+[output.html.fold]
+enable = true
+level = 0
 
 [output.html.search]
 enable = false
