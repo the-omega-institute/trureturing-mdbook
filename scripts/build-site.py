@@ -397,10 +397,11 @@ The source of mathematical truth is always the upstream repository, never this s
 The content shown here is pinned to upstream commit [`{sha}`]({commit_url}).
 {snapshot_freshness(built_at)}
 
-The generator, configuration and workflows in this repository are MIT licensed. The upstream
-content on these pages is fetched from upstream at build time; upstream declares no content
-license, so this site grants no rights to that content and does not sublicense it. KaTeX and
-Pagefind assets retain their own copyright and license notices.
+The generator, configuration and workflows in this repository are MIT licensed. For upstream
+content, consult the license and any content-specific notices in the
+[upstream source at this snapshot]({UPSTREAM_REPOSITORY}/tree/{sha}).
+This site grants no rights to that content and does not sublicense it. KaTeX and Pagefind
+assets retain their own copyright and license notices.
 
 ## Search
 

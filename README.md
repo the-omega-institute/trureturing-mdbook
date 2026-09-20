@@ -197,6 +197,9 @@ and the files whose bytes the verifier checks.
 
 The MIT License in [LICENSE](LICENSE) covers **only the generator, configuration and workflows
 written in this repository**. The upstream content shown on the built pages is fetched from
-upstream at build time. Upstream currently declares no content license, so this repository grants
-no rights to that content and does not sublicense it. KaTeX, Pagefind and their generated assets
-remain under their own licenses and notices. See [NOTICE.md](NOTICE.md) for the full statement.
+upstream at build time. Upstream currently provides an
+[Apache-2.0 LICENSE](https://github.com/the-omega-institute/trureturing/blob/dev/LICENSE).
+For a built snapshot, consult the license and any content-specific notices at the exact upstream
+commit recorded in `provenance.json`. This repository grants no rights to that content and does
+not sublicense it. KaTeX, Pagefind and their generated assets remain under their own licenses
+and notices. See [NOTICE.md](NOTICE.md) for the full statement.
