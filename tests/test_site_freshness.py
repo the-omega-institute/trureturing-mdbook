@@ -139,11 +139,12 @@ class FreshnessTests(unittest.TestCase):
             destination.write_bytes((fixtures.ROOT / name).read_bytes())
         original = freshness.generator_revision(generator)
         self.assertEqual(original, freshness.generator_revision())
-        for name in ("scripts/open_problems.py", "scripts/render_source_links.py"):
+        for name in ("scripts/open_problems.py", "scripts/render_source_links.py", "theme/head.hbs"):
             with self.subTest(name=name):
                 (generator / name).write_text("changed build input")
                 self.assertNotEqual(original, freshness.generator_revision(generator))
                 (generator / name).write_bytes((fixtures.ROOT / name).read_bytes())
+                self.assertEqual(original, freshness.generator_revision(generator))
         built = fixtures.build_site.build_site(self.upstream, self.output)
         self.assertEqual(built["generator_revision"], original)
         self.assertTrue(freshness.provenance_is_usable(built))

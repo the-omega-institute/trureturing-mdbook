@@ -25,7 +25,7 @@ GENERATOR_INPUTS = (
     "scripts/build-site.py", "scripts/escape_pseudo_links.py", "scripts/katex_render.js",
     "scripts/math_scan.py", "scripts/open_problems.py", "scripts/render_katex.py",
     "scripts/render_source_links.py", "scripts/source_tree.py", "scripts/verify-site.py",
-    "scripts/site_freshness.py",
+    "scripts/site_freshness.py", "theme/head.hbs",
 )
 FRESHNESS_POLICY = (
     "Upstream changes are checked on a nominal 15-minute schedule. "

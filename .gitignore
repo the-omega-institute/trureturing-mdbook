@@ -28,6 +28,9 @@
 !/scripts/katex_render.js
 !/package.json
 !/package-lock.json
+!/theme/
+/theme/*
+!/theme/head.hbs
 !/tests/
 /tests/*
 !/tests/test_build_site.py
