@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import quote_from_bytes
 
 try:
+    from search_titles import search_bootstrap
     from site_freshness import generator_revision, snapshot_freshness
     from open_problems import OpenProblemError, derive_open_problems
     from source_tree import (
@@ -28,6 +29,7 @@ try:
         list_source_entries as read_source_entries,
     )
 except ModuleNotFoundError:
+    from scripts.search_titles import search_bootstrap
     from scripts.site_freshness import generator_revision, snapshot_freshness
     from scripts.open_problems import OpenProblemError, derive_open_problems
     from scripts.source_tree import (
@@ -386,7 +388,7 @@ def build_changelog(
     return "\n".join(lines)
 
 
-def build_index(sha: str, built_at: str, published: frozenset[bytes]) -> str:
+def build_index(sha: str, built_at: str, published: frozenset[bytes], revision: str) -> str:
     commit_url = f"{UPSTREAM_REPOSITORY}/commit/{sha}"
     current_upstream = f"{UPSTREAM_REPOSITORY}/blob/dev"
     examples = (
@@ -430,15 +432,14 @@ larger shape for yourself.
 [**Start your journey with Claude Code or Codex**]({current_upstream}/README.md#start-your-journey)
 — current upstream guidance.
 
-## Search
+## Search {{#library-search-heading}}
 
 <link href="pagefind/pagefind-ui.css" rel="stylesheet">
-<div id="search"></div>
-<script src="pagefind/pagefind-ui.js"></script>
+<div id="library-search"></div>
+<script id="pagefind-ui" src="pagefind/pagefind-ui.js"></script>
+
 <script>
-window.addEventListener("DOMContentLoaded", function () {{
-  new PagefindUI({{ element: "#search", showSubResults: true }});
-}});
+{search_bootstrap(sha, revision, built_at)}
 </script>
 
 ## Follow a question
@@ -536,7 +537,7 @@ def write_projection(
         build_summary(entries, titles, directories), encoding="utf-8"
     )
     published = frozenset(entry.path for entry in entries)
-    (staging / "index.md").write_text(build_index(sha, built_at, published), encoding="utf-8")
+    (staging / "index.md").write_text(build_index(sha, built_at, published, revision), encoding="utf-8")
     (staging / "open-problems.md").write_text(
         build_open_problems(upstream, sha, built_at), encoding="utf-8"
     )

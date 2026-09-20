@@ -139,6 +139,9 @@ jobs:
       - name: Render immutable upstream source links
         run: python3 scripts/render_source_links.py .upstream "$RUNNER_TEMP/trureturing-mdbook-site-src" book
 
+      - name: Extract native search labels
+        run: python3 scripts/search_titles.py "$RUNNER_TEMP/trureturing-mdbook-site-src" book
+
       - name: Build Pagefind index
         run: pagefind_extended --site book --force-language zh
 
