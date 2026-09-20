@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import quote_from_bytes
 
 try:
+    from render_source_links import SourceLinkError, regular_source_paths
     from search_titles import search_bootstrap
     from site_freshness import generator_revision, snapshot_freshness
     from open_problems import OpenProblemError, derive_open_problems
@@ -29,6 +30,7 @@ try:
         list_source_entries as read_source_entries,
     )
 except ModuleNotFoundError:
+    from scripts.render_source_links import SourceLinkError, regular_source_paths
     from scripts.search_titles import search_bootstrap
     from scripts.site_freshness import generator_revision, snapshot_freshness
     from scripts.open_problems import OpenProblemError, derive_open_problems
@@ -48,6 +50,12 @@ PROJECTION_MARKER_CONTENT = b"trureturing-mdbook projection v1\n"
 CHANGELOG_DAYS = 30
 SHA_RE = re.compile(rb"^[0-9a-f]{40,64}$")
 H1_RE = re.compile(r"^# (.*)\r?$", re.MULTILINE)
+INFORMATION_ESCAPE_TITLE = "What can these observations distinguish?"
+INFORMATION_ESCAPE_ROOT = b"D5/S3/ConceptDynamics/InformationEscape/"
+INFORMATION_ESCAPE_SOURCES = frozenset(
+    INFORMATION_ESCAPE_ROOT + name
+    for name in (b"EscapePairs.lean", b"StructuralNovelty.lean", b"TheoremUnit.lean")
+)
 
 
 class BuildError(RuntimeError):
@@ -221,11 +229,13 @@ def build_summary(
     entries: list[SourceEntry],
     titles: dict[bytes, str],
     directories: set[bytes],
+    information_escape: bool = False,
 ) -> str:
     lines = [
         "# Summary",
         "",
         "- [Home](index.md)",
+        *([f"- [{INFORMATION_ESCAPE_TITLE}](information-escape.md)"] if information_escape else []),
         "- [Changelog](changelog.md)",
         "- [External open problems](open-problems.md)",
     ]
@@ -388,7 +398,10 @@ def build_changelog(
     return "\n".join(lines)
 
 
-def build_index(sha: str, built_at: str, published: frozenset[bytes], revision: str) -> str:
+def build_index(
+    sha: str, built_at: str, published: frozenset[bytes], revision: str,
+    information_escape: bool = False,
+) -> str:
     commit_url = f"{UPSTREAM_REPOSITORY}/commit/{sha}"
     current_upstream = f"{UPSTREAM_REPOSITORY}/blob/dev"
     examples = (
@@ -414,6 +427,13 @@ def build_index(sha: str, built_at: str, published: frozenset[bytes], revision: 
             "Browse examples in the current upstream guidance."
         )
     question_routes = "\n".join(routes)
+    escape_route = (
+        f"- [{INFORMATION_ESCAPE_TITLE}](information-escape.md) "
+        "Work through four states and the four information-escape questions."
+        if information_escape else
+        f"- [Where does information escape?]({current_upstream}/README.md#information-escape) "
+        "Current upstream methodology; this snapshot lacks the complete source references for the worked route."
+    )
     return f"""# trureturing — Discovering truth
 
 trureturing is a **truth-discovery library**. Its name brings together **true**, **return**
@@ -444,6 +464,7 @@ larger shape for yourself.
 
 ## Follow a question
 
+{escape_route}
 {question_routes}
 - [What is recorded as resolved, and what has no recorded resolution?](open-problems.md)
   Explore the external problem dossiers and their snapshot resolution records.
@@ -468,6 +489,143 @@ content, consult the license and any content-specific notices in the
 [upstream source at this snapshot]({UPSTREAM_REPOSITORY}/tree/{sha}).
 This site grants no rights to that content and does not sublicense it. KaTeX and Pagefind
 assets retain their own copyright and license notices.
+"""
+
+
+def build_information_escape(sha: str, published: frozenset[bytes]) -> str:
+    """An educational enumeration, separate from the immutable source projection.
+
+    The caller checks exact regular-file paths at the captured SHA. That checks
+    destinations, not the semantic compatibility of arbitrary future revisions.
+    """
+    source = f"{UPSTREAM_REPOSITORY}/blob/{sha}/{INFORMATION_ESCAPE_ROOT.decode()}"
+    current = f"{UPSTREAM_REPOSITORY}/blob/dev"
+    blueprint = b"Blueprint/" + INFORMATION_ESCAPE_ROOT + b"EscapePairs.md"
+    blueprint_route = (
+        f"\nRead the [EscapePairs Blueprint page]({markdown_path(blueprint)}) in this snapshot.\n"
+        if blueprint in published else ""
+    )
+    return f"""# {INFORMATION_ESCAPE_TITLE}
+
+Suppose two records both begin with `0`. Does that make them the same record?
+Follow a small example through the four information-escape questions, then bring
+the same questions to an observation of your own.
+
+## A fixed four-state model
+
+**Elementary educational enumeration — not a new Lean theorem or a certified judge run.**
+Our entire state space is `00`, `01`, `10`, `11`. For a state `ab`, the **first**
+readout returns `a` and the **second** returns `b`. Two states are indistinguishable
+when every selected readout returns the same value on both.
+
+Write **E(S)** for the escape pairs left by the selected readouts S. These are
+**ordered pairs of distinct states**: `(00, 01)` and `(01, 00)` both count;
+`(00, 00)` never counts. Each group below contains exactly the states that still
+look alike. Different groups are distinguishable.
+
+<table style="width: 100%; overflow-wrap: anywhere;">
+<caption>All four readout selections on the same four states</caption>
+<thead>
+<tr><th scope="col">Readouts</th><th scope="col">Indistinguishable groups</th><th scope="col">Escape pairs</th></tr>
+</thead>
+<tbody>
+<tr><th scope="row">None</th><td>{{00, 01, 10, 11}}</td><td>12</td></tr>
+<tr><th scope="row">First</th><td>{{00, 01}}<br>{{10, 11}}</td><td>4</td></tr>
+<tr><th scope="row">Second</th><td>{{00, 10}}<br>{{01, 11}}</td><td>4</td></tr>
+<tr><th scope="row">Both</th><td>{{00}}<br>{{01}}<br>{{10}}<br>{{11}}</td><td>0</td></tr>
+</tbody>
+</table>
+
+A group of size k contributes **k(k − 1)** ordered distinct pairs: choose the
+first state in k ways, then a different state in k − 1 ways. Add over the groups.
+Thus no readouts leave 4 × 3 = 12 pairs; either coordinate alone leaves
+2 × (2 × 1) = 4; both leave only singleton groups, hence 0.
+
+## Where did information escape?
+
+With only **first**, `00` and `01` both return `0`. The escape pairs are
+`(00, 01)`, `(01, 00)`, `(10, 11)` and `(11, 10)`. The first coordinate says
+nothing about which second coordinate a state has.
+
+## How is that escape addressed?
+
+Add **second** while keeping the same state space and the first readout.
+It returns `0` on `00` and `1` on `01`, separating a pair that first alone
+could not distinguish. An extra readout supplies a distinction the old readout lacks.
+The source law [escapePairs_insert]({source}EscapePairs.lean) describes this filtering:
+adding a readout retains only old escape pairs on which that readout also agrees.
+
+## What new information emerges?
+
+The pair of observations now identifies each of these four states:
+`00` returns `(0, 0)`, `01` returns `(0, 1)`, `10` returns `(1, 0)` and
+`11` returns `(1, 1)`. All four pairs left by first are distinguished by second.
+You can check each distinction directly in the table.
+
+## Where does information continue to escape?
+
+First alone still confuses `10` with `11`; second alone still confuses `00`
+with `10`. With both, no distinct pair remains indistinguishable **inside this
+fixed model**. An empty residual here says nothing about unmodeled states,
+unmeasured properties or every question one could ask about the world.
+
+## What does each readout uniquely contribute?
+
+Now fix **one catalog C = {{first, second}}**. For each entry i, remove only that
+entry and compare with the same full catalog. Its unique captures are
+**E(C without i) minus E(C)**, as formalized by
+[uniqueCapturePairs_eq_sdiff]({source}EscapePairs.lean).
+Here E(C) is empty, so the exact sets are:
+
+- **first**: `(00, 10)`, `(10, 00)`, `(01, 11)`, `(11, 01)` — **4 pairs**.
+  Removing first leaves second, which confuses states within each of its two groups.
+- **second**: `(00, 01)`, `(01, 00)`, `(10, 11)`, `(11, 10)` — **4 pairs**.
+  Removing second leaves first, with the other two groups.
+
+These counts answer a different question from a sequence of additions.
+Starting with no readouts, adding first removes **8** of the 12 pairs;
+adding second removes the remaining **4**. The fixed-catalog unique counts are
+**4 and 4**, not 8 and 4. Pairs differing in both coordinates — `(00, 11)`,
+`(11, 00)`, `(01, 10)` and `(10, 01)` — are distinguished by either readout.
+They belong to neither unique-capture set, so unique counts need not sum to 12.
+
+Distinct catalog entries can even have the same agreement kernel: they distinguish
+exactly the same pairs. Then both have zero unique capture, by
+[same_kernel_both_zero]({source}StructuralNovelty.lean). This does not imply
+worthlessness; a distinction can be shared. These comparisons establish neither
+universal research value nor historical novelty.
+
+## Follow the source, keep the boundary
+
+The [EscapePairs source]({source}EscapePairs.lean) defines `escapePairs` and
+`uniqueCapturePairs`. Its coordinate fixture, `escapeFixtureCatalog`, uses
+`Bool × Bool`, represented above by two digits, and checks the empty full-catalog
+residual and the two unique counts of four.
+
+That fixture's units use `Statement := True` and `proof := True.intro`.
+They illustrate the kernels; they do not establish that a substantive theorem's
+meaning is faithfully represented by a declared readout, or that it has been
+registered for the judge. In [TheoremUnit]({source}TheoremUnit.lean),
+`NativeTheoremUnit` ties a proof to a law of a realization, while
+`LegacyPrimitiveRealization` requires an equivalence connecting a legacy statement
+to that law. Such semantic connections require their own evidence.
+{blueprint_route}
+The formal source links above are pinned to this book's [captured snapshot]({UPSTREAM_REPOSITORY}/commit/{sha}).
+Check the definitions and assumptions when carrying this example to another revision or context.
+
+For operational status, follow the [**current upstream methodology**]({current}/README.md#information-escape)
+and the [**Normative Draft**]({current}/docs/develop/spec/lean_single_compile_intrinsic_information_escape_theory_and_spec.md).
+These follow upstream `dev`, which may be newer than this snapshot. The judge is
+**under development**: current declared-template findings are **Observe warnings,
+not admission blockers**; other checks have independent effects. The draft describes
+the wider design, not a completed judge. A rule's module delta selection decides
+what to inspect; it is separate from removing an entry from one fixed catalog above.
+
+**Try your own question:** find a pair of states your observations cannot distinguish.
+Name the state space, the observations, an added readout and any ambiguity that remains.
+Follow the [current journey]({current}/README.md#start-your-journey) and
+[repository skills guidance]({current}/docs/CONTRIBUTING.md#use-claude-code-or-codex)
+to explore the definitions and develop a contribution with Claude Code or Codex.
 """
 
 
@@ -532,12 +690,22 @@ def write_projection(
         destination.chmod(0o755 if entry.mode == b"100755" else 0o644)
         titles[entry.path] = file_title(entry.path, content)
 
+    try:
+        information_escape = INFORMATION_ESCAPE_SOURCES <= regular_source_paths(upstream, sha)
+    except SourceLinkError as exc:
+        raise BuildError(f"cannot check information-escape source references: {exc}") from exc
     directories = directory_set(entries)
     (staging / "SUMMARY.md").write_text(
-        build_summary(entries, titles, directories), encoding="utf-8"
+        build_summary(entries, titles, directories, information_escape), encoding="utf-8"
     )
     published = frozenset(entry.path for entry in entries)
-    (staging / "index.md").write_text(build_index(sha, built_at, published, revision), encoding="utf-8")
+    (staging / "index.md").write_text(
+        build_index(sha, built_at, published, revision, information_escape), encoding="utf-8"
+    )
+    if information_escape:
+        (staging / "information-escape.md").write_text(
+            build_information_escape(sha, published), encoding="utf-8"
+        )
     (staging / "open-problems.md").write_text(
         build_open_problems(upstream, sha, built_at), encoding="utf-8"
     )

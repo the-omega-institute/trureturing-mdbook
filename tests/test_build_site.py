@@ -3,12 +3,16 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from html.parser import HTMLParser
+from itertools import permutations, product
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -400,6 +404,239 @@ class EntranceRouteTests(unittest.TestCase):
         for path in self.EXAMPLES:
             self.assertNotIn(f"]({path})", index)
             self.assertFalse((self.output / path).exists())
+
+
+class WorkedEscapeRouteTests(unittest.TestCase):
+    setUp = BuildSiteTests.setUp
+    tearDown = BuildSiteTests.tearDown
+    git = BuildSiteTests.git
+    write = BuildSiteTests.write
+    commit = BuildSiteTests.commit
+
+    # Deliberately independent of the generator's selection constants.
+    SOURCES = tuple(
+        f"D5/S3/ConceptDynamics/InformationEscape/{name}.lean"
+        for name in ("EscapePairs", "StructuralNovelty", "TheoremUnit")
+    )
+    BLUEPRINT = "Blueprint/D5/S3/ConceptDynamics/InformationEscape/EscapePairs.md"
+
+    def fixture(self) -> str:
+        self.write("Blueprint/Page.md", "# A published page\n")
+        for source in self.SOURCES:
+            self.write(source, "-- Source destination fixture, not Lean validation.\n")
+        return self.commit("source references", "2026-07-09T09:00:00+00:00")
+
+    def assert_route(self, present: bool) -> str:
+        page = self.output / "information-escape.md"
+        self.assertEqual(page.is_file(), present)
+        index = (self.output / "index.md").read_text()
+        summary = (self.output / "SUMMARY.md").read_text()
+        self.assertEqual("](information-escape.md)" in index, present)
+        self.assertEqual("](information-escape.md)" in summary, present)
+        if present:
+            self.assertIn(
+                "- [Home](index.md)\n"
+                "- [What can these observations distinguish?](information-escape.md)\n",
+                summary,
+            )
+        else:
+            self.assertIn("Current upstream methodology", index)
+            self.assertIn("/blob/dev/README.md#information-escape", index)
+        return page.read_text() if present else ""
+
+    def test_generated_groups_and_unique_sets_by_independent_enumeration(self) -> None:
+        sha = self.fixture()
+        provenance = build_site.build_site(self.upstream, self.output, upstream_sha=sha)
+        page = self.assert_route(True)
+
+        class TableReader(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.rows, self.captions = [], []
+                self.cell = None
+                self.in_caption = False
+
+            def handle_starttag(self, tag, attrs):
+                if tag == "tr":
+                    self.rows.append([])
+                elif tag in ("th", "td"):
+                    self.cell = [tag, dict(attrs).get("scope"), ""]
+                    self.rows[-1].append(self.cell)
+                elif tag == "caption":
+                    self.in_caption = True
+                    self.captions.append("")
+
+            def handle_data(self, data):
+                if self.cell is not None:
+                    self.cell[2] += data
+                if self.in_caption:
+                    self.captions[-1] += data
+
+            def handle_endtag(self, tag):
+                if tag in ("th", "td"):
+                    self.cell = None
+                elif tag == "caption":
+                    self.in_caption = False
+
+        table = TableReader()
+        table.feed(page)
+        self.assertEqual(table.captions, ["All four readout selections on the same four states"])
+        self.assertEqual(table.rows[0], [
+            ["th", "col", "Readouts"],
+            ["th", "col", "Indistinguishable groups"],
+            ["th", "col", "Escape pairs"],
+        ])
+        states = ["".join(bits) for bits in product("01", repeat=2)]
+        distinct_pairs = set(permutations(states, 2))
+        selections = {"None": (), "First": (0,), "Second": (1,), "Both": (0, 1)}
+        escapes = {}
+        self.assertEqual(len(table.rows), 5)
+        for row, (label, coordinates) in zip(table.rows[1:], selections.items(), strict=True):
+            self.assertEqual(row[0], ["th", "row", label])
+            groups = {}
+            for state in states:
+                observation = tuple(state[i] for i in coordinates)
+                groups.setdefault(observation, set()).add(state)
+            shown_groups = [
+                frozenset(group.split(", ")) for group in re.findall(r"\{([^}]+)\}", row[1][2])
+            ]
+            self.assertCountEqual(shown_groups, map(frozenset, groups.values()), label)
+            escapes[label] = {
+                (a, b) for a, b in distinct_pairs if all(a[i] == b[i] for i in coordinates)
+            }
+            self.assertEqual(int(row[2][2]), len(escapes[label]), label)
+            self.assertEqual(len(escapes[label]), sum(len(g) * (len(g) - 1) for g in groups.values()))
+
+        for entry, remaining in (("first", "Second"), ("second", "First")):
+            line = next(line for line in page.splitlines() if line.startswith(f"- **{entry}**:"))
+            pairs = re.findall(r"`\(([01]{2}), ([01]{2})\)`", line)
+            self.assertCountEqual(pairs, escapes[remaining] - escapes["Both"])
+        self.assertEqual(len(escapes["None"] - escapes["First"]), 8)
+        self.assertEqual(len(escapes["First"] - escapes["Both"]), 4)
+        self.assertIn("adding first removes **8**", page)
+        self.assertIn("**4 and 4**, not 8 and 4", page)
+        for question in (
+            "Where did information escape?", "How is that escape addressed?",
+            "What new information emerges?", "Where does information continue to escape?",
+        ):
+            self.assertIn(f"## {question}", page)
+        for boundary in (
+            "not a new Lean theorem or a certified judge run", "Statement := True",
+            "proof := True.intro", "NativeTheoremUnit", "LegacyPrimitiveRealization",
+            "under development", "Observe warnings", "not admission blockers",
+        ):
+            self.assertIn(boundary, page)
+        for source in self.SOURCES:
+            self.assertIn(f"/blob/{sha}/{source})", page)
+        self.assertNotRegex(page, r"\.lean#L\d")
+        self.assertIn("/blob/dev/README.md#information-escape", page)
+        self.assertIn("[**Normative Draft**]", page)
+        self.assertIn("/blob/dev/docs/develop/spec/", page)
+        self.assertNotIn("<script", page)
+        self.assertNotIn(self.BLUEPRINT, page)
+        self.assertEqual(provenance["file_count"], 1)
+        self.assertEqual((self.output / "Blueprint/Page.md").read_bytes(),
+                         (self.upstream / "Blueprint/Page.md").read_bytes())
+
+    def test_tutorial_links_survive_the_existing_prose_preprocessor(self) -> None:
+        self.fixture()
+        build_site.build_site(self.upstream, self.output)
+        page = self.assert_route(True)
+        self.assertEqual(escape_pseudo_links.escape_pseudo_links(page), page)
+
+    def test_all_sources_required_despite_decoys_or_worktree_files(self) -> None:
+        self.write("Blueprint/Page.md", "# Published\n")
+        for source in self.SOURCES:
+            self.write(f"elsewhere/{Path(source).name}", "-- Decoy\n")
+        for present in ((), self.SOURCES[:1], self.SOURCES[:2], self.SOURCES):
+            with self.subTest(present=present):
+                for source in self.SOURCES:
+                    if source in present:
+                        self.write(source, "-- Selected\n")
+                    else:
+                        (self.upstream / source).unlink(missing_ok=True)
+                sha = self.commit("partial tree", "2026-07-09T09:00:00+00:00")
+                for source in self.SOURCES:
+                    self.write(source, "-- Uncommitted worktree file\n")
+                build_site.build_site(self.upstream, self.output, upstream_sha=sha)
+                self.assert_route(present == self.SOURCES)
+
+    def test_each_required_path_must_be_regular_not_a_symlink(self) -> None:
+        self.fixture()
+        for source in self.SOURCES:
+            with self.subTest(source=source):
+                entry = self.upstream / source
+                entry.unlink()
+                os.symlink("EscapePairs.lean" if entry.name != "EscapePairs.lean"
+                           else "StructuralNovelty.lean", entry)
+                sha = self.commit("symlink source", "2026-07-09T09:00:00+00:00")
+                build_site.build_site(self.upstream, self.output, upstream_sha=sha)
+                self.assert_route(False)
+                entry.unlink()
+                self.write(source, "-- Restored regular source\n")
+
+    def test_captured_history_controls_additions_removals_and_stale_cleanup(self) -> None:
+        self.write("Blueprint/Page.md", "# Earlier snapshot\n")
+        before = self.commit("before references", "2026-07-08T09:00:00+00:00")
+        complete = self.fixture()
+        # A later HEAD and complete working tree must not create the historical route.
+        build_site.build_site(self.upstream, self.output, upstream_sha=before)
+        self.assert_route(False)
+        (self.upstream / self.SOURCES[-1]).unlink()
+        after = self.commit("remove a reference", "2026-07-10T09:00:00+00:00")
+        # A missing file at HEAD must not suppress the captured historical route.
+        build_site.build_site(self.upstream, self.output, upstream_sha=complete)
+        page = self.assert_route(True)
+        self.assertIn(f"/blob/{complete}/", page)
+        self.assertNotIn(f"/blob/{after}/", page)
+        build_site.build_site(self.upstream, self.output, upstream_sha=after)
+        self.assert_route(False)
+
+    def test_blueprint_link_requires_exact_published_regular_path(self) -> None:
+        self.fixture()
+        self.write("Blueprint/Elsewhere/EscapePairs.md", "# Decoy\n")
+        for kind in ("missing", "symlink", "regular"):
+            with self.subTest(kind=kind):
+                entry = self.upstream / self.BLUEPRINT
+                entry.parent.mkdir(parents=True, exist_ok=True)
+                if kind == "symlink":
+                    os.symlink("../../../../Elsewhere/EscapePairs.md", entry)
+                elif kind == "regular":
+                    entry.unlink()
+                    self.write(self.BLUEPRINT, "# Published EscapePairs\n")
+                sha = self.commit("Blueprint selection", "2026-07-09T09:00:00+00:00")
+                build_site.build_site(self.upstream, self.output, upstream_sha=sha)
+                page = self.assert_route(True)
+                self.assertEqual(f"]({self.BLUEPRINT})" in page, kind == "regular")
+                self.assertEqual(entry.is_symlink(), kind == "symlink")
+
+    def test_git_tree_failure_is_an_error_and_preserves_previous_output(self) -> None:
+        sha = self.fixture()
+        build_site.build_site(self.upstream, self.output, upstream_sha=sha)
+        previous = (self.output / "provenance.json").read_bytes()
+        original_run = subprocess.run
+
+        def fail_full_tree(command, **kwargs):
+            if command[3:] == ["ls-tree", "-r", "-z", sha]:
+                raise subprocess.CalledProcessError(1, command, stderr=b"tree unavailable")
+            return original_run(command, **kwargs)
+
+        with mock.patch.object(subprocess, "run", side_effect=fail_full_tree):
+            with self.assertRaisesRegex(build_site.BuildError, "source references.*tree unavailable"):
+                build_site.build_site(self.upstream, self.output, upstream_sha=sha)
+        self.assertEqual((self.output / "provenance.json").read_bytes(), previous)
+        self.assert_route(True)
+
+    def test_existing_link_gate_requires_tutorial_html(self) -> None:
+        self.fixture()
+        build_site.build_site(self.upstream, self.output)
+        book = self.root / "book"
+        book.mkdir()
+        (book / "index.html").write_text('<a href="information-escape.html">Worked route</a>')
+        with self.assertRaisesRegex(verify_site.VerificationError, "broken relative.*information-escape"):
+            verify_site.validate_links(book, [b"index.html"])
+        (book / "information-escape.html").write_text("<h1>Worked route</h1>")
+        self.assertEqual(verify_site.validate_links(book, [b"index.html"]), 1)
 
 
 class VerifySiteTests(unittest.TestCase):
