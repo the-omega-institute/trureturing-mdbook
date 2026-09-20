@@ -139,7 +139,8 @@ class FreshnessTests(unittest.TestCase):
             destination.write_bytes((fixtures.ROOT / name).read_bytes())
         original = freshness.generator_revision(generator)
         self.assertEqual(original, freshness.generator_revision())
-        for name in ("scripts/open_problems.py", "scripts/render_source_links.py", "theme/head.hbs"):
+        for name in ("scripts/open_problems.py", "scripts/render_source_links.py",
+                     "scripts/search_titles.py", "scripts/search_titles.js"):
             with self.subTest(name=name):
                 (generator / name).write_text("changed build input")
                 self.assertNotEqual(original, freshness.generator_revision(generator))

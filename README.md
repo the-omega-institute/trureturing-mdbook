@@ -30,7 +30,7 @@ Git index.
 
 Provenance includes `upstream_sha`, `file_count`, `tool_version`, `built_at` and
 `generator_revision`. The generator revision is a SHA-256 digest of the named build inputs in
-`scripts/site_freshness.py` (configuration, workflow and Python scripts), so even local edits are
+`scripts/site_freshness.py` (configuration, workflow and build scripts), so even local edits are
 identified accurately. One UTC build timestamp is shared by provenance, the home page and the
 problem page. It describes when that snapshot build began; it is not a last-checked timestamp.
 Checks that skip an identical deployment leave the snapshot timestamp intact.
@@ -54,6 +54,7 @@ SITE_SRC="$(mktemp -d)"
 python3 scripts/build-site.py /path/to/trureturing "$SITE_SRC"
 MDBOOK_BOOK__SRC="$SITE_SRC" mdbook build --dest-dir book
 python3 scripts/render_source_links.py /path/to/trureturing "$SITE_SRC" book
+python3 scripts/search_titles.py "$SITE_SRC" book
 pagefind_extended --site book --force-language zh
 python3 scripts/verify-site.py /path/to/trureturing "$SITE_SRC" book
 ```
@@ -86,6 +87,22 @@ stay relative. Query strings and fragments are retained. Only rendered anchor at
 change; copied upstream Markdown and all other HTML bytes stay intact. This step runs before
 Pagefind and the unchanged release gate, which still rejects missing relative resources.
 
+Next, `search_titles.py` reads native rendered HTML head titles without changing the pages.
+It preserves the full title, including mdBook's book suffix, and omits absent or blank titles.
+The generated `search-titles-<digest>.json` is qualified by upstream SHA, generator revision
+and build timestamp, validated against source/book provenance. The homepage embeds that same
+identity before rendering. The map is generated only in the book and is never committed.
+
+The homepage locates the book root from its loaded Pagefind UI asset and fetches that exact map
+once before initializing search, with a two-second abort deadline. Missing, invalid, stale or
+slow maps fall back to stock labels. A synchronous `processResult` copies only `meta.title`;
+Pagefind still owns retrieval, ranking, links, excerpts, subheadings and text escaping.
+The pinned Pagefind's public `raw_url` preserves literal site-relative filenames (including
+Unicode, spaces, `%`, `#` and `?`), except that a terminal `index.html` becomes a slash.
+Lookup reverses only that shortening when the map contains the file. No URL decoding, case
+folding, Unicode normalization or processed-URL fallback is applied; unknown paths retain
+their original labels. Root and project-prefix hosting share the same map keys.
+
 Pagefind's segmentation language is pinned to `zh` while the mdBook page language stays `en`; the
 two are independent knobs. Almost all Blueprint content is English, but a handful of upstream pages
 contain Chinese terms, and `zh` segmentation is what makes those terms findable. Measured on the
@@ -98,7 +115,7 @@ For manual search verification, serve the build with
 actually appears upstream (for example `未入账`) and one English term (for example `Knaster`). Both
 must return at least one result.
 
-Unit tests need Python and Git; use the test invocation and environment in
+Unit tests need Python, Git and Node; use the test invocation and environment in
 [.github/workflows/pages.yml](.github/workflows/pages.yml) as the reference:
 
 ```sh
