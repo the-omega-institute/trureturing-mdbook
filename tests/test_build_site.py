@@ -342,6 +342,66 @@ class BuildSiteTests(unittest.TestCase):
         self.assertEqual(selected, expected)
 
 
+class EntranceRouteTests(unittest.TestCase):
+    setUp = BuildSiteTests.setUp
+    tearDown = BuildSiteTests.tearDown
+    git = BuildSiteTests.git
+    write = BuildSiteTests.write
+    commit = BuildSiteTests.commit
+
+    EXAMPLES = (
+        "Blueprint/D5/S0/Certificates/GreathouseLogTwoFloorRefutation.md",
+        "Blueprint/D5/S3/Quantum/Entanglement/LocalMarginalCorrelationBlindSpot.md",
+    )
+    FALLBACK = "[Which questions could I explore?]"
+
+    def test_home_routes_follow_exact_selected_paths(self) -> None:
+        # Matching basenames at other paths must not select a curated route.
+        for path in self.EXAMPLES:
+            self.write(f"Blueprint/Other/{Path(path).name}", "# Other page\n")
+        for selected in ((), self.EXAMPLES[:1], self.EXAMPLES[1:], self.EXAMPLES):
+            with self.subTest(selected=selected):
+                for path in self.EXAMPLES:
+                    if path in selected:
+                        self.write(path, "# Example\n")
+                    else:
+                        (self.upstream / path).unlink(missing_ok=True)
+                sha = self.commit("example selection", "2026-07-07T09:00:00+00:00")
+
+                build_site.build_site(self.upstream, self.output, upstream_sha=sha)
+                index = (self.output / "index.md").read_text(encoding="utf-8")
+
+                for path in self.EXAMPLES:
+                    target = f"]({path})"
+                    if path in selected:
+                        self.assertIn(target, index)
+                        self.assertTrue((self.output / path).is_file())
+                    else:
+                        self.assertNotIn(target, index)
+                self.assertEqual(self.FALLBACK in index, not selected)
+                self.assertIn(
+                    f"{build_site.UPSTREAM_REPOSITORY}/blob/dev/README.md#three-places-to-look",
+                    index,
+                )
+                self.assertIn("](open-problems.md)", index)
+                self.assertTrue((self.output / "open-problems.md").is_file())
+
+    def test_historical_snapshot_uses_fallback_even_when_head_has_examples(self) -> None:
+        self.write("Blueprint/Page.md", "# Historical page\n")
+        historical_sha = self.commit("small snapshot", "2026-07-07T09:00:00+00:00")
+        for path in self.EXAMPLES:
+            self.write(path, "# New example\n")
+        self.commit("later examples", "2026-07-08T09:00:00+00:00")
+
+        build_site.build_site(self.upstream, self.output, upstream_sha=historical_sha)
+        index = (self.output / "index.md").read_text(encoding="utf-8")
+
+        self.assertIn(self.FALLBACK, index)
+        for path in self.EXAMPLES:
+            self.assertNotIn(f"]({path})", index)
+            self.assertFalse((self.output / path).exists())
+
+
 class VerifySiteTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()

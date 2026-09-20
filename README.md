@@ -42,7 +42,11 @@ group; production runs are serialized. No upstream dispatcher or additional secr
 
 ## Local build
 
-Requires Python 3.10 or later, Git, Node 18 or later, mdBook 0.5.4 and Pagefind Extended 1.5.2:
+Requires Python with the standard-library features used by the scripts, Git, Node with npm,
+mdBook and Pagefind Extended. Use [.github/workflows/pages.yml](.github/workflows/pages.yml)
+for the tested build environment and executable pins,
+[package.json](package.json) and [package-lock.json](package-lock.json) for the Node dependency,
+and [book.toml](book.toml) for the mdBook configuration and preprocessor commands:
 
 ```sh
 npm ci --ignore-scripts --no-audit --no-fund
@@ -94,7 +98,8 @@ For manual search verification, serve the build with
 actually appears upstream (for example `未入账`) and one English term (for example `Knaster`). Both
 must return at least one result.
 
-Unit tests need only Python 3.10 or later and Git:
+Unit tests need Python and Git; use the test invocation and environment in
+[.github/workflows/pages.yml](.github/workflows/pages.yml) as the reference:
 
 ```sh
 python3 -m unittest discover -s tests -v

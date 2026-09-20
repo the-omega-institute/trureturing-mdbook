@@ -386,9 +386,74 @@ def build_changelog(
     return "\n".join(lines)
 
 
-def build_index(sha: str, built_at: str) -> str:
+def build_index(sha: str, built_at: str, published: frozenset[bytes]) -> str:
     commit_url = f"{UPSTREAM_REPOSITORY}/commit/{sha}"
-    return f"""# trureturing Blueprint
+    current_upstream = f"{UPSTREAM_REPOSITORY}/blob/dev"
+    examples = (
+        (
+            b"Blueprint/D5/S0/Certificates/GreathouseLogTwoFloorRefutation.md",
+            "Can a plausible formula fail?",
+            "Follow the refutation of the literal OEIS A175406 floor formula at an explicit index.",
+        ),
+        (
+            b"Blueprint/D5/S3/Quantum/Entanglement/LocalMarginalCorrelationBlindSpot.md",
+            "Do local observations determine the whole?",
+            "Explore a finite quantum-state example: two different global states have the same local marginals.",
+        ),
+    )
+    routes = [
+        f"- [{question}]({markdown_path(path)}) {description}"
+        for path, question, description in examples
+        if path in published
+    ]
+    if not routes:
+        routes.append(
+            f"- [Which questions could I explore?]({current_upstream}/README.md#three-places-to-look) "
+            "Browse examples in the current upstream guidance."
+        )
+    question_routes = "\n".join(routes)
+    return f"""# trureturing — Discovering truth
+
+trureturing is a **truth-discovery library**. Its name brings together **true**, **return**
+and **Turing**: truth, return and Turing computation. Logic here includes mathematical
+reasoning as well as philosophical and conceptual inquiry.
+
+**If machine learning is a logical black box, this project is a logical white box.**
+Definitions, assumptions, proof steps and dependencies make reasoning inspectable.
+**All logic can be formalized** is the guiding conviction, not a universal theorem or
+a completed capability. Lean proofs establish their stated claims under their assumptions;
+research inputs, experiments and open questions retain their own scope.
+
+This entrance offers a glimpse of the iceberg. Bring your own question and explore its
+larger shape for yourself.
+
+**[Start your journey with Claude Code or Codex]({current_upstream}/README.md#start-your-journey)**
+— current upstream guidance.
+
+## Search
+
+<link href="pagefind/pagefind-ui.css" rel="stylesheet">
+<div id="search"></div>
+<script src="pagefind/pagefind-ui.js"></script>
+<script>
+window.addEventListener("DOMContentLoaded", function () {{
+  new PagefindUI({{ element: "#search", showSubResults: true }});
+}});
+</script>
+
+## Follow a question
+
+{question_routes}
+- [What is recorded as resolved, and what has no recorded resolution?](open-problems.md)
+  Explore the external problem dossiers and their snapshot resolution records.
+
+Continue with **current upstream guidance**:
+[First run]({current_upstream}/README.md#first-run) ·
+[Use Claude Code or Codex and contribute]({current_upstream}/docs/CONTRIBUTING.md#use-claude-code-or-codex) ·
+[Three places to look]({current_upstream}/README.md#three-places-to-look).
+These links follow upstream `dev` and may describe work beyond this book's snapshot.
+
+## About this snapshot
 
 This site is an automatically derived projection of the `Blueprint/`, `Problems/` and `Library/` Markdown content in
 [the-omega-institute/trureturing]({UPSTREAM_REPOSITORY}), published for browsing and search.
@@ -402,17 +467,6 @@ content, consult the license and any content-specific notices in the
 [upstream source at this snapshot]({UPSTREAM_REPOSITORY}/tree/{sha}).
 This site grants no rights to that content and does not sublicense it. KaTeX and Pagefind
 assets retain their own copyright and license notices.
-
-## Search
-
-<link href="pagefind/pagefind-ui.css" rel="stylesheet">
-<div id="search"></div>
-<script src="pagefind/pagefind-ui.js"></script>
-<script>
-window.addEventListener("DOMContentLoaded", function () {{
-  new PagefindUI({{ element: "#search", showSubResults: true }});
-}});
-</script>
 """
 
 
@@ -481,14 +535,13 @@ def write_projection(
     (staging / "SUMMARY.md").write_text(
         build_summary(entries, titles, directories), encoding="utf-8"
     )
-    (staging / "index.md").write_text(build_index(sha, built_at), encoding="utf-8")
+    published = frozenset(entry.path for entry in entries)
+    (staging / "index.md").write_text(build_index(sha, built_at, published), encoding="utf-8")
     (staging / "open-problems.md").write_text(
         build_open_problems(upstream, sha, built_at), encoding="utf-8"
     )
     (staging / "changelog.md").write_text(
-        build_changelog(
-            upstream, sha, frozenset(entry.path for entry in entries)
-        ),
+        build_changelog(upstream, sha, published),
         encoding="utf-8",
     )
     # One navigation page per menu entry: a directory folded into a chain has none.
