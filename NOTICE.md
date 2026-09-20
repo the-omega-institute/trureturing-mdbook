@@ -12,7 +12,7 @@ The published site fetches Blueprint content at build time from:
 
 https://github.com/the-omega-institute/trureturing
 
-The upstream repository currently declares no license for that content. This repository does not grant rights to, sublicense, or relicense the upstream Blueprint content. The upstream repository and the exact commit recorded in each build's `provenance.json` remain the authoritative source.
+The upstream repository currently provides an [Apache-2.0 LICENSE](https://github.com/the-omega-institute/trureturing/blob/dev/LICENSE). This repository does not grant rights to, sublicense, or relicense the upstream Blueprint content. Consult the upstream license and any content-specific notices at the exact commit recorded in each build's `provenance.json` for the terms that apply to that snapshot.
 
 ## Third-party generated assets
 
