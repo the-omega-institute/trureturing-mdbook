@@ -427,7 +427,7 @@ research inputs, experiments and open questions retain their own scope.
 This entrance offers a glimpse of the iceberg. Bring your own question and explore its
 larger shape for yourself.
 
-**[Start your journey with Claude Code or Codex]({current_upstream}/README.md#start-your-journey)**
+[**Start your journey with Claude Code or Codex**]({current_upstream}/README.md#start-your-journey)
 — current upstream guidance.
 
 ## Search
