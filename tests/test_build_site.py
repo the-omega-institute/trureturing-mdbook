@@ -455,8 +455,14 @@ class WorkedEscapeRouteTests(unittest.TestCase):
                 self.rows, self.captions = [], []
                 self.cell = None
                 self.in_caption = False
+                self.regions, self.ids = [], {}
 
             def handle_starttag(self, tag, attrs):
+                attributes = dict(attrs)
+                if "id" in attributes:
+                    self.ids[attributes["id"]] = tag
+                if attributes.get("role") == "region":
+                    self.regions.append(attributes)
                 if tag == "tr":
                     self.rows.append([])
                 elif tag in ("th", "td"):
@@ -481,10 +487,17 @@ class WorkedEscapeRouteTests(unittest.TestCase):
         table = TableReader()
         table.feed(page)
         self.assertEqual(table.captions, ["All four readout selections on the same four states"])
+        self.assertEqual(len(table.regions), 1)
+        region = table.regions[0]
+        self.assertEqual(region["tabindex"], "0")
+        self.assertEqual(table.ids[region["aria-labelledby"]], "caption")
+        self.assertEqual(table.ids[region["aria-describedby"]], "p")
+        self.assertIn("focus the table, then use Left/Right arrows", page)
+        self.assertIn("**Pairs** counts the escape pairs", page)
         self.assertEqual(table.rows[0], [
             ["th", "col", "Readouts"],
-            ["th", "col", "Indistinguishable groups"],
-            ["th", "col", "Escape pairs"],
+            ["th", "col", "Groups"],
+            ["th", "col", "Pairs"],
         ])
         states = ["".join(bits) for bits in product("01", repeat=2)]
         distinct_pairs = set(permutations(states, 2))

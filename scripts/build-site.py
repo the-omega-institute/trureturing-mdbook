@@ -505,6 +505,8 @@ def build_information_escape(sha: str, published: frozenset[bytes]) -> str:
         f"\nRead the [EscapePairs Blueprint page]({markdown_path(blueprint)}) in this snapshot.\n"
         if blueprint in published else ""
     )
+    # Keep native table scrolling when mdBook's document-level arrow shortcuts run.
+    # The local handler only stops bubbling; scrolling also works without JavaScript.
     return f"""# {INFORMATION_ESCAPE_TITLE}
 
 Suppose two records both begin with `0`. Does that make them the same record?
@@ -521,12 +523,25 @@ when every selected readout returns the same value on both.
 Write **E(S)** for the escape pairs left by the selected readouts S. These are
 **ordered pairs of distinct states**: `(00, 01)` and `(01, 00)` both count;
 `(00, 00)` never counts. Each group below contains exactly the states that still
-look alike. Different groups are distinguishable.
+look alike. Different groups are distinguishable. In the table, **Groups** lists
+these indistinguishable groups and **Pairs** counts the escape pairs.
 
-<table style="width: 100%; overflow-wrap: anywhere;">
-<caption>All four readout selections on the same four states</caption>
+<style>
+#escape-comparison {{ overflow-x: auto; }}
+#escape-comparison:focus-visible {{ outline: 2px solid currentColor; outline-offset: 2px; }}
+#escape-comparison table {{ width: 100%; overflow-wrap: normal; word-break: normal; }}
+#escape-comparison th, #escape-comparison td {{ white-space: nowrap; padding: 0.2em 0.65em; }}
+@media print {{
+    #escape-comparison {{ overflow: visible; }}
+    #escape-comparison-hint {{ display: none; }}
+}}
+</style>
+<p id="escape-comparison-hint">Scroll sideways if needed. Keyboard: focus the table, then use Left/Right arrows.</p>
+<div id="escape-comparison" role="region" aria-labelledby="escape-comparison-caption" aria-describedby="escape-comparison-hint" tabindex="0" onkeydown="if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') event.stopPropagation()">
+<table>
+<caption id="escape-comparison-caption">All four readout selections on the same four states</caption>
 <thead>
-<tr><th scope="col">Readouts</th><th scope="col">Indistinguishable groups</th><th scope="col">Escape pairs</th></tr>
+<tr><th scope="col">Readouts</th><th scope="col">Groups</th><th scope="col">Pairs</th></tr>
 </thead>
 <tbody>
 <tr><th scope="row">None</th><td>{{00, 01, 10, 11}}</td><td>12</td></tr>
@@ -535,6 +550,7 @@ look alike. Different groups are distinguishable.
 <tr><th scope="row">Both</th><td>{{00}}<br>{{01}}<br>{{10}}<br>{{11}}</td><td>0</td></tr>
 </tbody>
 </table>
+</div>
 
 A group of size k contributes **k(k − 1)** ordered distinct pairs: choose the
 first state in k ways, then a different state in k − 1 ways. Add over the groups.
