@@ -24,6 +24,19 @@ and a provenance record. It then
 builds with pinned mdBook, KaTeX under Node and Pagefind Extended, and deploys only after the source
 set, page mapping, math output, relative links and artifact size all pass their gates.
 
+The generator also owns `information-escape.md`, an English static worked route titled
+“What can these observations distinguish?”. Its four-state table and fixed-catalog comparison
+are educational enumeration, not a new theorem or a certified judge run. The chapter, home
+route and nearby sidebar entry appear together only when the captured Git tree contains regular
+files at all three exact paths `D5/S3/ConceptDynamics/InformationEscape/{EscapePairs,StructuralNovelty,TheoremUnit}.lean`.
+Otherwise the home page links to the clearly labelled current upstream methodology. Git read
+failures stop the build. Formal source links use the captured SHA; a local EscapePairs Blueprint
+link appears only when its exact page is published. This availability check verifies destinations,
+not semantic compatibility with arbitrary future source revisions. The walkthrough was checked
+against upstream `45762b6eeecc99923d7e1238136072019a8ab1a4`; operational guidance and the Normative Draft
+are explicitly linked to current `dev`. Derived prose does not enter the upstream `file_count` or
+change any projected source bytes. The complete route works without JavaScript.
+
 Nothing derived is committed. The upstream checkout, the projected source tree, `SUMMARY.md`, the
 changelog, the search index and the built book are all recomputed on every run and never enter the
 Git index.
