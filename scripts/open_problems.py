@@ -107,7 +107,8 @@ def git(upstream: Path, *args: str, input: bytes | None = None) -> bytes:
 
 
 def input_entries(upstream: Path, sha: str) -> list[SourceEntry]:
-    raw = git(upstream, "ls-tree", "-r", "-z", sha, "--", "Blueprint", "Problems", "Library")
+    raw = git(upstream, "ls-tree", "-r", "-z", sha, "--", "Blueprint", "Problems", "Library",
+              "Golden/Frozen/state")
     entries = []
     for record in raw.split(b"\0"):
         if not record:
@@ -318,8 +319,8 @@ def marker_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def parse_markers(blobs: list[tuple[bytes, bytes]], slugs: set[str]) -> dict[str, Resolution]:
-    resolutions: dict[str, Resolution] = {}
+def parse_markers(blobs: list[tuple[bytes, bytes]], slugs: set[str]) -> dict[str, tuple[Resolution, ...]]:
+    resolutions: dict[str, list[Resolution]] = {}
     for path, blob in blobs:
         if MARKER_PREFIX.encode() not in blob:
             continue
@@ -355,17 +356,19 @@ def parse_markers(blobs: list[tuple[bytes, bytes]], slugs: set[str]) -> dict[str
                 raise OpenProblemError(f"{label} has an invalid declaration GID")
             if slug not in slugs:
                 raise OpenProblemError(f"{label} references unknown problem slug {slug}")
-            if slug in resolutions:
-                raise OpenProblemError(f"{label} has duplicate resolution slug {slug}")
-            resolutions[slug] = Resolution(kind, gid, path, number)
-    return resolutions
+            members = resolutions.setdefault(slug, [])
+            if members:
+                if path != members[0].path:
+                    raise OpenProblemError(f"{label} has duplicate resolution slug on another page: {slug}")
+                if kind != members[0].kind:
+                    raise OpenProblemError(f"{label} has mixed resolution kinds for {slug}")
+                if any(member.declaration_gid == gid for member in members):
+                    raise OpenProblemError(f"{label} has duplicate resolution declaration GID {gid}")
+            members.append(Resolution(kind, gid, path, number))
+    return {slug: tuple(members) for slug, members in resolutions.items()}
 
 
-def frozen_state_date(upstream: Path, sha: str, blueprint_path: bytes) -> str:
-    # Upstream's documented GID layout preserves module segments across .lean,
-    # Blueprint/*.scribe.cs and Blueprint/*.md. The marker container is authoritative.
-    module = blueprint_path.removeprefix(b"Blueprint/").removesuffix(b".md")
-    state_path = b"Golden/Frozen/state/" + module + b".lean.json"
+def frozen_state_date(upstream: Path, sha: str, state_path: bytes) -> str:
     history = git(
         upstream, "log", "--diff-filter=A", "--format=%cs", "--reverse", "--no-renames",
         sha, "--", ":(literal)" + os.fsdecode(state_path),
@@ -438,9 +441,23 @@ def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) 
                  if entry.path.startswith(b"Blueprint/") and is_published_path(entry.path)
                  and entry.mode in PUBLISHED_MODES]
     resolutions = parse_markers(input_blobs(upstream, blueprint), {p.slug for p in problems})
+    entry_by_path = {entry.path: entry for entry in entries}
+    member_paths: dict[str, tuple[bytes, bytes]] = {}
+    for members in resolutions.values():
+        for member in members:
+            module = member.declaration_gid.split(".", 1)[0].encode("ascii")
+            page_path = b"Blueprint/" + module + b".md"
+            state_path = b"Golden/Frozen/state/" + module + b".lean.json"
+            for target in (page_path, state_path):
+                entry = entry_by_path.get(target)
+                if entry is None or entry.mode not in PUBLISHED_MODES:
+                    raise OpenProblemError(f"missing current theorem page or frozen state: {os.fsdecode(target)}")
+            member_paths[member.declaration_gid] = (page_path, state_path)
+    input_blobs(upstream, [entry_by_path[state] for state in
+                           sorted({state for _, state in member_paths.values()})])
     frozen_dates = {
         path: frozen_state_date(upstream, sha, path)
-        for path in sorted({resolution.path for resolution in resolutions.values()})
+        for path in sorted({state for _, state in member_paths.values()})
     }
     lines = [
         "# External open problems", "",
@@ -453,7 +470,8 @@ def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) 
     # Solved: newest freeze first; the stable sort keeps slug order within a day.
     solved_problems = sorted(
         (problem for problem in problems if problem.slug in resolutions),
-        key=lambda problem: frozen_dates[resolutions[problem.slug].path], reverse=True,
+        key=lambda problem: max(frozen_dates[member_paths[member.declaration_gid][1]]
+                                for member in resolutions[problem.slug]), reverse=True,
     )
     for heading, listed, count in (
         ("Solved", solved_problems, len(resolutions)),
@@ -466,15 +484,17 @@ def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) 
             dossier_url = quote_from_bytes(problem.path, safe="/")
             note_url = quote_from_bytes(note.path, safe="/")
             lines.extend([f"### {markdown_text(problem.title)}", ""])
-            resolution = resolutions.get(problem.slug)
-            if resolution is not None:
-                target = quote_from_bytes(resolution.path, safe="/")
-                label = "Proved" if resolution.kind == "proved" else "Refuted"
-                declaration = resolution.declaration_gid.split(".", 1)[1]
-                lines.extend([
-                    f"**{label}.** Lean theorem [`{declaration}`]({target}), "
-                    f"frozen in this repository {frozen_dates[resolution.path]}.", "",
-                ])
+            members = resolutions.get(problem.slug)
+            if members is not None:
+                label = "Proved" if members[0].kind == "proved" else "Refuted"
+                for index, member in enumerate(members):
+                    page_path, state_path = member_paths[member.declaration_gid]
+                    target = quote_from_bytes(page_path, safe="/")
+                    declaration = member.declaration_gid.split(".", 1)[1]
+                    prefix = f"**{label}.** " if index == 0 else ""
+                    lines.append(f"{prefix}Lean theorem [`{declaration}`]({target}), "
+                                 f"frozen in this repository {frozen_dates[state_path]}.")
+                lines.append("")
             lines.extend([
                 note.citation(), "",
                 f"**Claim.** {markdown_text(note.claim)}", "",
@@ -488,7 +508,7 @@ def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) 
         "The citation and claim of each entry are copied from the reading note's front matter (authors, year, title, DOI or URL, claim). The claim is the note's transcription of the source statement; whether it quotes the source exactly is not checked here.",
         "The records are read as text, so ordinary prose can produce one; this page does not check that a record came from the repository's own verified claim.",
         "This page does not run the repository's checks or verify the named theorems or their Lean proofs.", "",
-        'The "frozen in this repository" date is the date of the first commit that added the theorem\'s module to the frozen record. It is not the date the problem was solved in the world or the resolution was recorded.',
-        "Solved entries are listed newest freeze first, and by problem slug within a day; unsolved entries are listed by slug.", "",
+        'The "frozen in this repository" date is the date of the first commit that added each named theorem\'s module to the frozen record. It is not the date the problem was solved in the world or the resolution was recorded.',
+        "Solved entries are listed by their latest member freeze date, newest first, and by problem slug within a day; unsolved entries are listed by slug.", "",
     ])
-    return ProblemPage("\n".join(lines), len(problems), len(resolutions))
+    return ProblemPage("\n".join(lines), len(problems), sum(map(len, resolutions.values())))
