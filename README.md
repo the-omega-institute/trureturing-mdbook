@@ -139,7 +139,7 @@ python3 -m unittest discover -s tests -v
 
 The generated root page `open-problems.md` lists every `Problems/<slug>.md` dossier — solved
 ones newest freeze first and by slug within a day, unsolved ones by slug — with
-any matching resolution marker in published Blueprint Markdown, a citation of the source
+any matching resolution markers in published Blueprint Markdown, a citation of the source
 and the claim, both copied from the reading note's front matter. The citation has the
 upstream acknowledgement shape — `authors (year). *title*. DOI: […](https://doi.org/…).
 URL: <…>.` — with the DOI first and the URL second when the note holds both; the claim is
@@ -193,28 +193,31 @@ comments with exactly `problem_slug`, `declaration_gid` and `resolution_kind`
 reader. `declaration_gid` must be a canonical formal GID with a declaration selector,
 such as `D5/S1/Words/Sumfree/GreedyThreeSumfreeTwoParameter.conjecture17`.
 Any occurrence of the reserved marker prefix must have valid syntax, version, and
-payload, even in a Markdown code example. Slugs must exist in the dossier set, be
-globally unique among markers. Markers may follow the producer's document/theorem order;
-the display remains ordered by dossier slug within each section. Violations fail the build.
+payload, even in a Markdown code example. Slugs must exist in the dossier set. Distinct
+member GIDs for one slug may appear on the same Blueprint page with the same kind;
+repeated members, mixed kinds and a second source page fail the build. One slug counts
+as one solved problem, while the marker count counts member records. Markers may follow
+the producer's document/theorem order; the display remains ordered by dossier slug
+within each section. Violations fail the build.
 
 These comments are records, not validated typed claims: ordinary narrative can emit
 identical bytes. The page does not consume a Describe report, establish repository
-validity, or validate Lean proofs. The theorem link displays only the declaration name
-(for example, `conjecture17`); its destination is unchanged, still
-using the marker's containing Blueprint path, with its source line. Upstream owns
+validity, or validate Lean proofs. Each theorem link displays only the declaration name
+(for example, `conjecture17`) and points to that member GID's Blueprint module page.
+The reader requires that page and its frozen-state file in the captured snapshot. Upstream owns
 the checks that a marker resolves uniquely to a currently frozen, theorem-like declaration.
 No matching marker means this repository has no recorded resolution binding
 in that Markdown snapshot; it says nothing about whether the problem is still open
 in the world or was resolved externally.
 
 "Frozen in repository" is the committer date (`YYYY-MM-DD`) of the first commit
-adding the module's frozen state file, reachable from the captured snapshot. It is
+adding each member's module frozen-state file, reachable from the captured snapshot. It is
 neither a world-resolution date nor the date the binding was recorded. The module
-path comes from the containing Blueprint page: `Blueprint/D5/X/Y.md` maps to
-`Golden/Frozen/state/D5/X/Y.lean.json`. This follows the segment-preserving Lean,
+path comes from each member GID: `D5/X/Y.theorem` maps to
+`Blueprint/D5/X/Y.md` and `Golden/Frozen/state/D5/X/Y.lean.json`. This follows the segment-preserving Lean,
 Scribe and Markdown address invariant in upstream's
 [repository specification, sections 2.3 and A2](https://github.com/the-omega-institute/trureturing/blob/5c1f71b3b34d4946698510e141193aa32d0b8a5d/docs/develop/spec/golden-ledger-repo-spec.md).
-No path is inferred from the declaration GID. The lookup is:
+Solved problems are ordered by their latest member freeze date. The lookup is:
 
 ```sh
 git log --diff-filter=A --format=%cs --reverse --no-renames "$SHA" -- \

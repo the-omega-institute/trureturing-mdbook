@@ -94,7 +94,7 @@ class OpenProblemTests(unittest.TestCase):
 
         resolution = parse_markers(
             [(b"Blueprint/D5/S1/Example.md", self.marker().encode())], {"alpha"},
-        )["alpha"]
+        )["alpha"][0]
         self.assertEqual(resolution.declaration_gid, "D5/S1/Example.theorem17")
         self.assertEqual(resolution.path, b"Blueprint/D5/S1/Example.md")
 
@@ -147,11 +147,11 @@ class OpenProblemTests(unittest.TestCase):
         self.assertIn("2026-07-03.\n\nA\\. Author (2026). *Example paper*. DOI: [10\\.48550\\/arXiv\\.2601\\.12345](https://doi.org/10.48550/arXiv.2601.12345).\n\n**Claim.** An external question\\.\n\n[Problem details]", entry)
         self.assertNotIn("Recorded Markdown marker:", entry)
 
-    def test_readme_describes_declaration_name_label_and_unchanged_destination(self) -> None:
+    def test_readme_describes_member_link_destination(self) -> None:
         readme = " ".join((fixtures.ROOT / "README.md").read_text(encoding="utf-8").split())
         self.assertIn(
-            "The theorem link displays only the declaration name (for example, `conjecture17`); "
-            "its destination is unchanged, still using the marker's containing Blueprint path",
+            "Each theorem link displays only the declaration name (for example, `conjecture17`) "
+            "and points to that member GID's Blueprint module page.",
             readme,
         )
 
@@ -281,7 +281,7 @@ class OpenProblemTests(unittest.TestCase):
             "The list is generated from problem files, reading notes, and resolution records in theorem pages at this source revision.",
             "The records are read as text, so ordinary prose can produce one; this page does not check that a record came from the repository's own verified claim.",
             "This page does not run the repository's checks or verify the named theorems or their Lean proofs.",
-            'The "frozen in this repository" date is the date of the first commit that added the theorem\'s module to the frozen record.',
+            'The "frozen in this repository" date is the date of the first commit that added each named theorem\'s module to the frozen record.',
             "It is not the date the problem was solved in the world or the resolution was recorded.",
         ):
             with self.subTest(sentence=sentence):
@@ -338,7 +338,7 @@ class OpenProblemTests(unittest.TestCase):
 
     def test_missing_frozen_state_history_is_an_error(self) -> None:
         self.fixture(self.marker(), frozen=False)
-        with self.assertRaisesRegex(build_site.BuildError, "no adding commit.*Golden/Frozen/state/D5/S1/Example.lean.json"):
+        with self.assertRaisesRegex(build_site.BuildError, "missing current theorem page or frozen state.*Golden/Frozen/state/D5/S1/Example.lean.json"):
             build_site.build_site(self.upstream, self.output)
         self.assertFalse(self.output.exists())
 
@@ -374,16 +374,63 @@ class OpenProblemTests(unittest.TestCase):
         self.write("Golden/Frozen/state/D5/S1/Example.lean.json", '{"statement_id":"later"}\n')
         self.commit("freeze after snapshot", "2026-07-08T09:00:00+00:00")
         with mock.patch.object(build_site, "capture_upstream_sha", return_value=sha):
-            with self.assertRaisesRegex(build_site.BuildError, "no adding commit"):
+            with self.assertRaisesRegex(build_site.BuildError, "missing current theorem page or frozen state"):
                 build_site.build_site(self.upstream, self.output)
 
-    def test_resolution_link_and_frozen_path_use_marker_container(self) -> None:
+    def test_resolution_link_and_frozen_path_require_member_module(self) -> None:
         self.fixture(self.marker(gid="D5/S1/DifferentName.Namespace.theorem17"))
+        with self.assertRaisesRegex(build_site.BuildError, "missing current theorem page or frozen state.*DifferentName.md"):
+            build_site.build_site(self.upstream, self.output)
+
+    def test_two_member_resolution_links_and_dates_each_theorem_and_counts_one_problem(self) -> None:
+        self.write("Golden/Frozen/state/D5/S1/Other.lean.json", '{"statement_id":"other"}\n')
+        self.commit("freeze second module", "2026-07-05T09:00:00+00:00")
+        self.fixture(self.marker() + self.marker(gid="D5/S1/Other.second"))
+        self.write("Blueprint/D5/S1/Other.md", "# Other theorem\n")
+        self.commit("publish second theorem page", "2026-07-07T09:00:00+00:00")
         build_site.build_site(self.upstream, self.output)
+        from scripts.open_problems import derive_open_problems
         page = (self.output / "open-problems.md").read_text(encoding="utf-8")
-        self.assertIn("[`Namespace.theorem17`](Blueprint/D5/S1/Example.md)", page)
-        self.assertNotIn("DifferentName", page)
-        self.assertIn("frozen in this repository 2026-07-03.", page)
+        self.assertIn("**1 of 2 solved in this repository.**", page)
+        self.assertIn("[`theorem17`](Blueprint/D5/S1/Example.md), frozen in this repository 2026-07-03.", page)
+        self.assertIn("[`second`](Blueprint/D5/S1/Other.md), frozen in this repository 2026-07-05.", page)
+        self.assertEqual(page.count("### Problem alpha"), 1)
+        self.assertIn("## Solved (1)", page)
+        self.assertEqual(derive_open_problems(self.upstream, self.git("rev-parse", "HEAD")).marker_count, 2)
+
+    def test_two_member_resolution_rejects_duplicate_mixed_kind_and_missing_member_page(self) -> None:
+        self.fixture(self.marker())
+        for marker, diagnostic in (
+            (self.marker(), "duplicate resolution declaration GID"),
+            (self.marker(kind="refuted", gid="D5/S1/Example.other"), "mixed resolution kinds"),
+        ):
+            with self.subTest(diagnostic=diagnostic):
+                self.check_rejected("Blueprint/D5/S1/Example.md", self.marker() + marker, diagnostic)
+        self.check_rejected("Blueprint/D5/S1/Example.md",
+                            self.marker() + self.marker(gid="D5/S1/Missing.other"),
+                            "missing current theorem page or frozen state.*Missing.md")
+
+    def test_solved_order_uses_latest_member_freeze(self) -> None:
+        self.write("Golden/Frozen/state/D5/S1/Example.lean.json", '{"statement_id":"example"}\n')
+        self.commit("freeze first member", "2026-07-03T09:00:00+00:00")
+        self.write("Golden/Frozen/state/D5/S1/Third.lean.json", '{"statement_id":"third"}\n')
+        self.commit("freeze beta member", "2026-07-04T09:00:00+00:00")
+        self.write("Golden/Frozen/state/D5/S1/Other.lean.json", '{"statement_id":"other"}\n')
+        self.commit("freeze second alpha member", "2026-07-05T09:00:00+00:00")
+        self.write("Blueprint/D5/S1/Example.md", "# Example\n\n" + self.marker()
+                   + self.marker(gid="D5/S1/Other.second"))
+        self.write("Blueprint/D5/S1/Other.md", "# Other\n")
+        self.write("Blueprint/D5/S1/Third.md", "# Third\n\n"
+                   + self.marker("beta", gid="D5/S1/Third.third"))
+        self.write("Problems/alpha.md", self.dossier())
+        self.write("Problems/beta.md", self.dossier("beta"))
+        self.write("Library/Words/paper2026.md", self.library())
+        self.commit("publish both resolutions", "2026-07-06T09:00:00+00:00")
+        build_site.build_site(self.upstream, self.output)
+        solved = (self.output / "open-problems.md").read_text(encoding="utf-8").split(
+            "## Solved (2)\n", 1)[1].split("\n## ", 1)[0]
+        self.assertEqual(re.findall(r"^### (.+)$", solved, re.MULTILINE),
+                         ["Problem alpha", "Problem beta"])
 
     def test_library_marker_text_is_not_a_blueprint_resolution(self) -> None:
         self.fixture()
@@ -463,7 +510,7 @@ class OpenProblemTests(unittest.TestCase):
         opened = page.split("## Not solved here (1)\n", 1)[1].split("\n## ", 1)[0]
         self.assertEqual(re.findall(r"^### (.+)$", opened, re.MULTILINE), ["Problem delta"])
         footer = page.split("## How this list is made\n", 1)[1]
-        self.assertIn("Solved entries are listed newest freeze first", footer)
+        self.assertIn("Solved entries are listed by their latest member freeze date, newest first", footer)
         verify_site.verify(self.upstream, self.output, self.mock_book())
 
     def test_accepts_theorem_order_but_displays_in_dossier_order(self) -> None:
@@ -471,7 +518,7 @@ class OpenProblemTests(unittest.TestCase):
 
         markers = self.marker("beta", "refuted", "D5/S1/Example.counterexample") + self.marker("alpha")
         parsed = parse_markers([(b"Blueprint/D5/S1/Example.md", markers.encode())], {"alpha", "beta"})
-        self.assertEqual((parsed["beta"].line, parsed["alpha"].line), (1, 2))
+        self.assertEqual((parsed["beta"][0].line, parsed["alpha"][0].line), (1, 2))
         self.fixture(markers)
         build_site.build_site(self.upstream, self.output)
         page = (self.output / "open-problems.md").read_text()
