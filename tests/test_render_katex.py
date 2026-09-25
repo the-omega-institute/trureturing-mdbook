@@ -47,6 +47,25 @@ class MathScanTests(unittest.TestCase):
         self.assertEqual([content[s:e] for s, e, _ in found], [b"$x$", b"$$y$$"])
         self.assertEqual([d for _, _, d in found], [False, True])
 
+    def test_github_inline_math_adjacent_to_chinese_and_code(self) -> None:
+        text = (
+            "$`X_i=\\theta_i+\\epsilon_i`$，其中 $`\\epsilon_i\\sim N(0,1)`$。\n"
+            "Ordinary $x$ and $$y$$; ``code $`z`$`` and \\$`escaped`$ and $next$ here.\n"
+            "```\n$`fenced`$\n```\n"
+        )
+        expected = [
+            ("$`X_i=\\theta_i+\\epsilon_i`$", False),
+            ("$`\\epsilon_i\\sim N(0,1)`$", False),
+            ("$x$", False), ("$$y$$", True), ("$next$", False),
+        ]
+        self.assertEqual(spans(text), expected)
+        self.assertEqual(fixtures.verify_site.markdown_math_token_count(text.encode("utf-8")),
+                         len(expected))
+        self.assertEqual(spans("$a$`code $b` and $c$"),
+                         [("$a$", False), ("$c$", False)])
+        self.assertEqual(spans("$a$$`b`$"),
+                         [("$a$", False), ("$`b`$", False)])
+
     def test_verifier_counts_the_same_spans(self) -> None:
         text = "$a$ `$b$` $$c$$\n```\n$d$\n```\n\\$e\n"
         self.assertEqual(fixtures.verify_site.markdown_math_token_count(text.encode()),
@@ -114,6 +133,15 @@ class RenderKatexTests(unittest.TestCase):
         out = self.render({"deep": formula + "\n"})
         self.assertEqual(out["deep"].count('class="katex-display"'), 1)
         self.assertNotIn("$$", out["deep"])
+
+    def test_renders_github_inline_math_as_two_real_katex_nodes(self) -> None:
+        content = "$`X_i=\\theta_i+\\epsilon_i`$，其中 $`\\epsilon_i\\sim N(0,1)`$。\n"
+        rendered = self.render({"Library/Dynamics/abraham2024sharp.md": content})[
+            "Library/Dynamics/abraham2024sharp.md"]
+        self.assertEqual(rendered.count('class="katex"'), 2)
+        self.assertIn("，其中 ", rendered)
+        self.assertNotIn("$`", rendered)
+        self.assertNotIn("`$", rendered)
 
     def test_chapters_without_math_are_unchanged_except_the_stylesheet(self) -> None:
         out = self.render({"plain": "# Title\n\nNo math here.\n"})

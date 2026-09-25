@@ -77,7 +77,7 @@ To reproduce a captured snapshot even if upstream HEAD has moved, add
 complete history, including frozen-state additions.
 
 Formulas are rendered by `scripts/render_katex.py`, an mdBook preprocessor that finds every
-`$…$` and `$$…$$` span with the same scanner the verifier counts with (`scripts/math_scan.py`)
+`$…$`, ``$`…`$`` and `$$…$$` span with the same scanner the verifier counts with (`scripts/math_scan.py`)
 and renders them all in one Node process with the KaTeX package pinned in `package-lock.json`.
 It replaced mdbook-katex, whose embedded QuickJS runtime has a 256 KiB stack: a theorem page
 with a few hundred nested `\left…\right` groups made it keep the source text, which the

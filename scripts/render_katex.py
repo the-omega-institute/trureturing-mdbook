@@ -97,7 +97,7 @@ def preprocess_book(book: dict[str, Any]) -> dict[str, Any]:
         spans = math_spans(raw)
         counts.append(len(spans))
         for formula_index, (start, end, display) in enumerate(spans):
-            width = 2 if display else 1
+            width = 2 if display or raw[start:start + 2] == b"$`" else 1
             formulas.append((raw[start + width:end - width].decode("utf-8"), display))
             owners.append((chapter_index, formula_index))
     try:
