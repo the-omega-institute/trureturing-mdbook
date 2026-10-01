@@ -52,6 +52,35 @@ def _visible_offsets(line: bytes, base: int) -> list[int]:
     return offsets
 
 
+def _fence_line(body: bytes, in_fence: tuple[bytes, int] | None) -> tuple[bool, tuple[bytes, int] | None]:
+    """Return whether ``body`` is a fence marker line and the fence state after it."""
+    stripped = body.lstrip(b" ")
+    indent = len(body) - len(stripped)
+    fence_match = FENCE_RE.match(stripped) if indent <= 3 else None
+    if not fence_match:
+        return False, in_fence
+    marker = fence_match.group(1)
+    if in_fence is None:
+        return True, (marker[:1], len(marker))
+    if (marker[:1] == in_fence[0] and len(marker) >= in_fence[1]
+            and not fence_match.group(2).strip()):
+        return True, None
+    return True, in_fence
+
+
+def outside_fences(content: str) -> str:
+    """Return ``content`` with fenced code lines (markers included) blanked, line count kept."""
+    lines = []
+    in_fence: tuple[bytes, int] | None = None
+    for line in content.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        is_marker, after = _fence_line(body.encode("utf-8"), in_fence)
+        hidden = is_marker or in_fence is not None
+        in_fence = after
+        lines.append(line[len(body):] if hidden else line)
+    return "".join(lines)
+
+
 def math_spans(content: bytes) -> list[tuple[int, int, bool]]:
     """Return ``(start, end, display)`` for every formula, as offsets into ``content``."""
     text = bytearray()
@@ -62,16 +91,8 @@ def math_spans(content: bytes) -> list[tuple[int, int, bool]]:
         base = position
         position += len(line)
         body = line.rstrip(b"\r\n")
-        stripped = body.lstrip(b" ")
-        indent = len(body) - len(stripped)
-        fence_match = FENCE_RE.match(stripped) if indent <= 3 else None
-        if fence_match:
-            marker = fence_match.group(1)
-            if in_fence is None:
-                in_fence = (marker[:1], len(marker))
-            elif (marker[:1] == in_fence[0] and len(marker) >= in_fence[1]
-                  and not fence_match.group(2).strip()):
-                in_fence = None
+        is_marker, in_fence = _fence_line(body, in_fence)
+        if is_marker:
             continue
         if in_fence is not None:
             continue

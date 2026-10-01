@@ -17,9 +17,11 @@ from pathlib import Path
 from urllib.parse import quote_from_bytes, urlsplit
 
 try:
+    from math_scan import outside_fences
     from site_freshness import snapshot_freshness
     from source_tree import PUBLISHED_MODES, SourceEntry, is_published_path
 except ModuleNotFoundError:
+    from scripts.math_scan import outside_fences
     from scripts.site_freshness import snapshot_freshness
     from scripts.source_tree import PUBLISHED_MODES, SourceEntry, is_published_path
 
@@ -301,7 +303,7 @@ def parse_dossiers(blobs: list[tuple[bytes, bytes]]) -> list[Problem]:
         if (not isinstance(gids, list) or not gids or len(set(gids)) != len(gids)
                 or any(not GID_RE.fullmatch(gid) for gid in gids)):
             raise OpenProblemError(f"{label}: motivation_gids must be unique formal GIDs")
-        titles = re.findall(r"^#(?: (.*))?$", body, re.MULTILINE)
+        titles = re.findall(r"^#(?: (.*))?$", outside_fences(body), re.MULTILINE)
         if len(titles) > 1 or (titles and not titles[0].strip()):
             raise OpenProblemError(f"{label}: expected at most one nonempty problem title")
         # The producer requires problem sections but does not require an H1.

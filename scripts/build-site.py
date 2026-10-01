@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import quote_from_bytes
 
 try:
+    from math_scan import outside_fences
     from render_source_links import SourceLinkError, regular_source_paths
     from search_titles import search_bootstrap
     from site_freshness import generator_revision, snapshot_freshness
@@ -30,6 +31,7 @@ try:
         list_source_entries as read_source_entries,
     )
 except ModuleNotFoundError:
+    from scripts.math_scan import outside_fences
     from scripts.render_source_links import SourceLinkError, regular_source_paths
     from scripts.search_titles import search_bootstrap
     from scripts.site_freshness import generator_revision, snapshot_freshness
@@ -159,7 +161,7 @@ def markdown_path(path: bytes) -> str:
 
 def file_title(path: bytes, content: bytes) -> str:
     text = content.decode("utf-8", "replace")
-    match = H1_RE.search(text)
+    match = H1_RE.search(outside_fences(text))
     if match and match.group(1).strip():
         return match.group(1).strip()
     name = posixpath.basename(path)
