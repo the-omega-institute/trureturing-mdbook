@@ -1044,6 +1044,26 @@ class OpenProblemTests(unittest.TestCase):
             with self.subTest(title=title), self.assertRaisesRegex(OpenProblemError, "problem title"):
                 parse_dossiers([(b"Problems/alpha.md", self.dossier().replace("# Problem alpha", title).encode())])
 
+    def test_hash_lines_inside_fenced_code_are_not_titles(self) -> None:
+        from scripts.open_problems import OpenProblemError, parse_dossiers
+
+        for fence in ("```", "~~~~"):
+            body = (
+                f"# Problem alpha\n\n{fence}python\n# a comment\n#\n# another\n"
+                f"{fence}\n\nText.\n"
+            )
+            with self.subTest(fence=fence):
+                [problem] = parse_dossiers([(b"Problems/alpha.md", self.dossier().replace(
+                    "# Problem alpha\n\nLater external resolutions have not been checked.\n",
+                    body).encode())])
+                self.assertEqual(problem.title, "Problem alpha")
+        # A second title after a closed fence is still a second title.
+        body = "# Problem alpha\n\n```\n# code\n```\n\n# Second\n"
+        with self.assertRaisesRegex(OpenProblemError, "problem title"):
+            parse_dossiers([(b"Problems/alpha.md", self.dossier().replace(
+                "# Problem alpha\n\nLater external resolutions have not been checked.\n",
+                body).encode())])
+
     def test_slug_prefixes_are_listed_in_slug_order(self) -> None:
         self.fixture()
         self.write("Problems/alpha-beta.md", self.dossier("alpha-beta"))

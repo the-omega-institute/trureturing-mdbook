@@ -346,6 +346,16 @@ class BuildSiteTests(unittest.TestCase):
         self.assertEqual(selected, expected)
 
 
+class FileTitleTests(unittest.TestCase):
+    def test_hash_lines_inside_fenced_code_are_not_titles(self) -> None:
+        content = b"```python\n# not a title\n```\n\n# Real title\n"
+        self.assertEqual(build_site.file_title(b"Library/x.md", content), "Real title")
+
+    def test_hash_lines_in_an_unclosed_fence_are_not_titles(self) -> None:
+        content = b"~~~\n# not a title\n"
+        self.assertEqual(build_site.file_title(b"Library/note.md", content), "note")
+
+
 class EntranceRouteTests(unittest.TestCase):
     setUp = BuildSiteTests.setUp
     tearDown = BuildSiteTests.tearDown
