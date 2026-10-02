@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import test_build_site as fixtures
@@ -147,18 +148,40 @@ class RenderKatexTests(unittest.TestCase):
         out = self.render({"plain": "# Title\n\nNo math here.\n"})
         self.assertEqual(out["plain"], render_katex.STYLESHEET_HEADER + "# Title\n\nNo math here.\n")
 
-    def test_katex_errors_fail_the_build_and_name_the_chapter(self) -> None:
+    def test_katex_parse_errors_fall_back_to_escaped_source_and_warn(self) -> None:
+        import html, re
+        sources = ["\\notacommand{x}_*a*", "\\floor*{\\frac{n}{2}}+\\{1\\}`[b](c)`"]
         result = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "render_katex.py")],
             input=json.dumps([{}, {"items": [{"Chapter": {
-                "name": "Bad", "path": "Blueprint/Bad.md", "content": "ok $x$ bad $\\notacommand{x}$\n", "sub_items": [],
+                "name": "Bad", "path": "Blueprint/Bad.md",
+                "content": f"ok $x$ bad ${sources[0]}$ and\n\n$${sources[1]}$$\n", "sub_items": [],
             }}]}]),
             capture_output=True, text=True, cwd=ROOT,
         )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Blueprint/Bad.md", result.stderr)
-        self.assertIn("notacommand", result.stderr)
-        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        content = json.loads(result.stdout)["items"][0]["Chapter"]["content"]
+        self.assertEqual(content.count('class="katex"'), 1)
+        fallbacks = re.findall(r'<code class="katex-fallback"( data-display="true")?>([^<]*)</code>', content)
+        self.assertEqual([html.unescape(text) for _, text in fallbacks], sources)
+        self.assertEqual([bool(display) for display, _ in fallbacks], [False, True])
+        # Markdown runs after the preprocessor: no raw ASCII punctuation may reach it.
+        for _, text in fallbacks:
+            self.assertRegex(text, r"^[^\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]*(&#[0-9]+;[^\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]*)*$")
+        self.assertNotIn("$", content.replace(render_katex.STYLESHEET_HEADER, ""))
+        warnings = [line for line in result.stderr.splitlines() if line.startswith("::warning ")]
+        self.assertEqual(len(warnings), 2)
+        self.assertIn("Blueprint/Bad.md: formula 1:", warnings[0])
+        self.assertIn("notacommand", warnings[0])
+        self.assertIn("Blueprint/Bad.md: formula 2:", warnings[1])
+        self.assertIn("floor", warnings[1])
+
+    def test_renderer_failures_other_than_parse_errors_still_fail_the_build(self) -> None:
+        with unittest.mock.patch.object(render_katex.subprocess, "run") as run:
+            run.return_value = subprocess.CompletedProcess([], 1, "", "katex-render: formula 0: RangeError: boom")
+            with self.assertRaisesRegex(render_katex.RenderError, "boom"):
+                render_katex.preprocess_book({"items": [{"Chapter": {
+                    "name": "P", "path": "P.md", "content": "$x$\n", "sub_items": []}}]})
 
     def test_missing_package_is_reported_as_an_install_step_not_a_render_error(self) -> None:
         import shutil, tempfile

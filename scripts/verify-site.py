@@ -30,6 +30,8 @@ except ModuleNotFoundError:
 SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
 ARTIFACT_LIMIT_BYTES = 1_000_000_000
 KATEX_MARKER = b'class="katex"'
+# render_katex.FALLBACK_CLASS: a formula KaTeX could not parse, shown as its source.
+FALLBACK_MARKER = b'class="katex-fallback"'
 
 
 class VerificationError(RuntimeError):
@@ -211,11 +213,14 @@ def validate_math(
         for path in source_paths
     }
     rendered_tokens: dict[bytes, int] = {}
+    fallback_tokens: dict[bytes, int] = {}
     mismatches: list[str] = []
     for source_path, expected_count in expected_tokens.items():
         html_path = source_path[:-3] + b".html"
-        actual_count = bytes_path(book, html_path).read_bytes().count(KATEX_MARKER)
-        rendered_tokens[html_path] = actual_count
+        content = bytes_path(book, html_path).read_bytes()
+        rendered_tokens[html_path] = content.count(KATEX_MARKER)
+        fallback_tokens[html_path] = content.count(FALLBACK_MARKER)
+        actual_count = rendered_tokens[html_path] + fallback_tokens[html_path]
         if actual_count != expected_count:
             mismatches.append(
                 f"{os.fsdecode(source_path)} expected {expected_count} KaTeX nodes, "
@@ -228,6 +233,7 @@ def validate_math(
         "mapped_katex_pages": sum(count > 0 for count in rendered_tokens.values()),
         "expected_math_tokens": sum(expected_tokens.values()),
         "rendered_katex_nodes": sum(rendered_tokens.values()),
+        "fallback_formulas": sum(fallback_tokens.values()),
         "all_html_katex_pages": all_katex_pages,
         "residual_double_dollars": residual,
     }

@@ -4,8 +4,12 @@
 It replaces mdbook-katex, whose embedded QuickJS runtime overflows its 256 KiB stack
 on deeply nested formulas and then keeps the source text, which the release gate
 refuses. The spans come from ``math_scan`` — the same scanner the verifier counts
-with — and every formula is rendered in one Node process; a KaTeX error fails the
-build and names the chapter.
+with — and every formula is rendered in one Node process.
+
+A formula KaTeX cannot parse does not stop the site: it is shown as its TeX source in
+a ``katex-fallback`` code element, which the verifier counts in place of a KaTeX node,
+and the build log carries a GitHub warning naming the chapter and formula. Any other
+renderer failure still fails the build.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ STYLESHEET_HEADER = (
     f'<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/katex.min.css">\n\n'
 )
 RENDERER = Path(__file__).resolve().with_name("katex_render.js")
+FALLBACK_CLASS = "katex-fallback"
 
 
 class RenderError(RuntimeError):
@@ -51,9 +56,34 @@ def chapters(book: dict[str, Any]) -> list[dict[str, Any]]:
     return found
 
 
-def render_formulas(formulas: list[tuple[str, bool]]) -> list[str]:
+def fallback_html(tex: str, display: bool) -> str:
+    """The TeX source as one line of inert HTML.
+
+    mdBook parses Markdown after this preprocessor, and text between raw HTML tags is
+    still Markdown, so every ASCII punctuation character is written as a numeric
+    character reference; references are decoded, never re-parsed as Markdown.
+    """
+    text = "".join(
+        " " if character in "\r\n\t"
+        else f"&#{ord(character)};" if character.isascii() and not character.isalnum() and character != " "
+        else character
+        for character in tex
+    )
+    attribute = ' data-display="true"' if display else ""
+    return f'<code class="{FALLBACK_CLASS}"{attribute}>{text}</code>'
+
+
+def warning_line(where: str, formula_index: int, message: str) -> str:
+    # GitHub workflow command; %, CR and LF must be escaped in the message.
+    text = f"{where}: formula {formula_index}: {message}"
+    text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return f"::warning title=KaTeX fallback::{text}"
+
+
+def render_formulas(formulas: list[tuple[str, bool]]) -> tuple[list[str | None], list[dict[str, Any]]]:
+    """Return KaTeX HTML per formula (``None`` where KaTeX could not parse it) and the failures."""
     if not formulas:
-        return []
+        return [], []
     payload = json.dumps([{"tex": tex, "display": display} for tex, display in formulas])
     try:
         result = subprocess.run(
@@ -68,9 +98,15 @@ def render_formulas(formulas: list[tuple[str, bool]]) -> list[str]:
     if output.get("version") != KATEX_VERSION:
         raise RenderError(f"katex {output.get('version')!r} is installed; {KATEX_VERSION} is pinned")
     html = output["html"]
-    if len(html) != len(formulas) or not all(isinstance(item, str) for item in html):
+    failures = output.get("failures")
+    if len(html) != len(formulas) or not isinstance(failures, list):
         raise RenderError("renderer returned a different number of formulas")
-    return html
+    failed = {failure.get("index") for failure in failures if isinstance(failure, dict)}
+    if (len(failed) != len(failures)
+            or any((item is None) != (index in failed) for index, item in enumerate(html))
+            or not all(item is None or isinstance(item, str) for item in html)):
+        raise RenderError("renderer returned inconsistent failures")
+    return html, failures
 
 
 def render_chapter(content: str, rendered: list[str]) -> str:
@@ -101,7 +137,7 @@ def preprocess_book(book: dict[str, Any]) -> dict[str, Any]:
             formulas.append((raw[start + width:end - width].decode("utf-8"), display))
             owners.append((chapter_index, formula_index))
     try:
-        rendered = render_formulas(formulas)
+        rendered, failures = render_formulas(formulas)
     except RenderError as exc:
         message = str(exc)
         prefix = "katex-render: formula "
@@ -112,6 +148,13 @@ def preprocess_book(book: dict[str, Any]) -> dict[str, Any]:
             where = chapter.get("path") or chapter.get("name") or f"chapter {chapter_index}"
             message = f"{where}: formula {formula_index}: {message.split(':', 2)[2].strip()}"
         raise RenderError(message) from None
+    for failure in failures:
+        index = failure["index"]
+        chapter_index, formula_index = owners[index]
+        chapter = found[chapter_index]
+        where = chapter.get("path") or chapter.get("name") or f"chapter {chapter_index}"
+        print(warning_line(where, formula_index, str(failure.get("message", ""))), file=sys.stderr)
+        rendered[index] = fallback_html(*formulas[index])
     position = 0
     for chapter, count in zip(found, counts, strict=True):
         chapter["content"] = render_chapter(chapter["content"], rendered[position:position + count])
