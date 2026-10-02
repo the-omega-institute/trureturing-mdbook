@@ -730,6 +730,26 @@ class VerifySiteTests(unittest.TestCase):
                 [b"Blueprint/Page.html"],
             )
 
+    def test_fallback_formulas_count_as_rendered_and_are_reported(self) -> None:
+        source = self.book / "fallback-source"
+        book = self.book / "fallback-book"
+        (source / "Blueprint").mkdir(parents=True)
+        (book / "Blueprint").mkdir(parents=True)
+        (source / "Blueprint/Page.md").write_text(
+            "good $x+1$ and bad $\\notacommand{x}$\n", encoding="utf-8"
+        )
+        (book / "Blueprint/Page.html").write_text(
+            '<span class="katex"><span>good</span></span> '
+            '<code class="katex-fallback">&#92;notacommand&#123;x&#125;</code>',
+            encoding="utf-8",
+        )
+        stats = verify_site.validate_math(
+            source, book, {b"Blueprint/Page.md"}, [b"Blueprint/Page.html"],
+        )
+        self.assertEqual(stats["expected_math_tokens"], 2)
+        self.assertEqual(stats["rendered_katex_nodes"], 1)
+        self.assertEqual(stats["fallback_formulas"], 1)
+
 
 class EscapePseudoLinksTests(unittest.TestCase):
     def test_escapes_only_adjacent_prose_notation(self) -> None:
