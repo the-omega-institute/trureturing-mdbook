@@ -1,6 +1,10 @@
 """Derive the problem page from immutable dossiers and Markdown marker records.
 
 Marker syntax is not evidence of a typed Scribe claim or a valid Lean proof.
+
+Given a ``report`` callback, a dossier, reading note or resolution record that cannot
+be interpreted is reported and left out (its problem, or that one record), and the rest
+of the page is still derived. Without one, the first such input raises.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Callable
 from urllib.parse import quote_from_bytes, urlsplit
 
 try:
@@ -46,6 +51,15 @@ BLOCK_SCALAR_MARKERS = {"|", "|-", "|+", ">", ">-", ">+"}
 
 class OpenProblemError(RuntimeError):
     """An input cannot be interpreted without guessing."""
+
+
+Report = Callable[[str], None]
+
+
+def skip_or_raise(report: Report | None, exc: OpenProblemError, consequence: str) -> None:
+    if report is None:
+        raise exc
+    report(f"{exc}; {consequence}")
 
 
 @dataclass(frozen=True)
@@ -275,41 +289,52 @@ def citation(fields: Fields, path: bytes) -> tuple[str | None, str | None]:
     return doi, url
 
 
-def parse_dossiers(blobs: list[tuple[bytes, bytes]]) -> list[Problem]:
+def parse_dossiers(
+    blobs: list[tuple[bytes, bytes]], report: Report | None = None,
+) -> list[Problem]:
     problems = []
     previous = ""
     for path, blob in blobs:
-        fields, body = front_matter(path, blob)
-        label = os.fsdecode(path)
-        if set(fields) - {"url"} != PROBLEM_KEYS:
-            raise OpenProblemError(
-                f"{label}: unsupported problem schema; expected slug, bibkey, doi, "
-                "triage, motivation_gids, with optional url"
-            )
-        slug = required_scalar(fields, "slug", path)
-        if not SLUG_RE.fullmatch(slug) or path != f"Problems/{slug}.md".encode():
-            raise OpenProblemError(f"{label}: noncanonical slug or slug/path mismatch")
-        if slug <= previous:
-            raise OpenProblemError(f"{label}: duplicate or out-of-order problem slug {slug}")
-        previous = slug
-        bibkey = required_scalar(fields, "bibkey", path)
-        doi, url = citation(fields, path)
-        triage = required_scalar(fields, "triage", path)
-        if not BIBKEY_RE.fullmatch(bibkey):
-            raise OpenProblemError(f"{label}: noncanonical bibkey")
-        if triage not in {"theorem", "window", "wall"}:
-            raise OpenProblemError(f"{label}: unknown triage")
-        gids = fields["motivation_gids"]
-        if (not isinstance(gids, list) or not gids or len(set(gids)) != len(gids)
-                or any(not GID_RE.fullmatch(gid) for gid in gids)):
-            raise OpenProblemError(f"{label}: motivation_gids must be unique formal GIDs")
-        titles = re.findall(r"^#(?: (.*))?$", outside_fences(body), re.MULTILINE)
-        if len(titles) > 1 or (titles and not titles[0].strip()):
-            raise OpenProblemError(f"{label}: expected at most one nonempty problem title")
-        # The producer requires problem sections but does not require an H1.
-        # Match the navigation's filename fallback when no title is supplied.
-        problems.append(Problem(slug, titles[0] if titles else slug, bibkey, doi, url, triage, path))
+        try:
+            problem = parse_dossier(path, blob, previous)
+        except OpenProblemError as exc:
+            skip_or_raise(report, exc, "the problem is left off the list")
+            continue
+        previous = problem.slug
+        problems.append(problem)
     return problems
+
+
+def parse_dossier(path: bytes, blob: bytes, previous: str) -> Problem:
+    fields, body = front_matter(path, blob)
+    label = os.fsdecode(path)
+    if set(fields) - {"url"} != PROBLEM_KEYS:
+        raise OpenProblemError(
+            f"{label}: unsupported problem schema; expected slug, bibkey, doi, "
+            "triage, motivation_gids, with optional url"
+        )
+    slug = required_scalar(fields, "slug", path)
+    if not SLUG_RE.fullmatch(slug) or path != f"Problems/{slug}.md".encode():
+        raise OpenProblemError(f"{label}: noncanonical slug or slug/path mismatch")
+    if slug <= previous:
+        raise OpenProblemError(f"{label}: duplicate or out-of-order problem slug {slug}")
+    bibkey = required_scalar(fields, "bibkey", path)
+    doi, url = citation(fields, path)
+    triage = required_scalar(fields, "triage", path)
+    if not BIBKEY_RE.fullmatch(bibkey):
+        raise OpenProblemError(f"{label}: noncanonical bibkey")
+    if triage not in {"theorem", "window", "wall"}:
+        raise OpenProblemError(f"{label}: unknown triage")
+    gids = fields["motivation_gids"]
+    if (not isinstance(gids, list) or not gids or len(set(gids)) != len(gids)
+            or any(not GID_RE.fullmatch(gid) for gid in gids)):
+        raise OpenProblemError(f"{label}: motivation_gids must be unique formal GIDs")
+    titles = re.findall(r"^#(?: (.*))?$", outside_fences(body), re.MULTILINE)
+    if len(titles) > 1 or (titles and not titles[0].strip()):
+        raise OpenProblemError(f"{label}: expected at most one nonempty problem title")
+    # The producer requires problem sections but does not require an H1.
+    # Match the navigation's filename fallback when no title is supplied.
+    return Problem(slug, titles[0] if titles else slug, bibkey, doi, url, triage, path)
 
 
 def marker_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -321,53 +346,71 @@ def marker_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def parse_markers(blobs: list[tuple[bytes, bytes]], slugs: set[str]) -> dict[str, tuple[Resolution, ...]]:
+def parse_markers(
+    blobs: list[tuple[bytes, bytes]], slugs: set[str], report: Report | None = None,
+) -> dict[str, tuple[Resolution, ...]]:
     resolutions: dict[str, list[Resolution]] = {}
     for path, blob in blobs:
         if MARKER_PREFIX.encode() not in blob:
             continue
         try:
-            lines = blob.decode("utf-8").splitlines()
-        except UnicodeError as exc:
-            raise OpenProblemError(f"{os.fsdecode(path)}: resolution marker page is not UTF-8") from exc
+            try:
+                lines = blob.decode("utf-8").splitlines()
+            except UnicodeError as exc:
+                raise OpenProblemError(f"{os.fsdecode(path)}: resolution marker page is not UTF-8") from exc
+        except OpenProblemError as exc:
+            skip_or_raise(report, exc, "its resolution records are ignored")
+            continue
         for number, line in enumerate(lines, 1):
             if MARKER_PREFIX not in line:
                 continue
-            label = f"{os.fsdecode(path)}:{number}: resolution marker"
-            match = MARKER_RE.fullmatch(line)
-            if match is None:
-                raise OpenProblemError(f"{label} has malformed syntax")
-            version, payload = match.groups()
-            if version != "1":
-                raise OpenProblemError(f"{label} has unknown schema version {version}")
             try:
-                record = json.loads(payload, object_pairs_hook=marker_object)
-            except (ValueError, RecursionError) as exc:
-                raise OpenProblemError(f"{label} has malformed JSON") from exc
-            if not isinstance(record, dict):
-                raise OpenProblemError(f"{label} payload must be a JSON object")
-            if set(record) != {"problem_slug", "declaration_gid", "resolution_kind"}:
-                raise OpenProblemError(f"{label} has missing or unknown keys")
-            slug, kind = record["problem_slug"], record["resolution_kind"]
-            gid = record["declaration_gid"]
-            if not isinstance(slug, str) or not SLUG_RE.fullmatch(slug):
-                raise OpenProblemError(f"{label} has an invalid problem slug")
-            if not isinstance(kind, str) or kind not in {"proved", "refuted"}:
-                raise OpenProblemError(f"{label} has an invalid resolution kind")
-            if not isinstance(gid, str) or not GID_RE.fullmatch(gid) or "." not in gid:
-                raise OpenProblemError(f"{label} has an invalid declaration GID")
-            if slug not in slugs:
-                raise OpenProblemError(f"{label} references unknown problem slug {slug}")
-            members = resolutions.setdefault(slug, [])
-            if members:
-                if path != members[0].path:
-                    raise OpenProblemError(f"{label} has duplicate resolution slug on another page: {slug}")
-                if kind != members[0].kind:
-                    raise OpenProblemError(f"{label} has mixed resolution kinds for {slug}")
-                if any(member.declaration_gid == gid for member in members):
-                    raise OpenProblemError(f"{label} has duplicate resolution declaration GID {gid}")
-            members.append(Resolution(kind, gid, path, number))
+                resolution, slug = parse_marker(line, path, number, slugs, resolutions)
+            except OpenProblemError as exc:
+                skip_or_raise(report, exc, "the record is ignored")
+                continue
+            resolutions.setdefault(slug, []).append(resolution)
     return {slug: tuple(members) for slug, members in resolutions.items()}
+
+
+def parse_marker(
+    line: str, path: bytes, number: int, slugs: set[str],
+    resolutions: dict[str, list[Resolution]],
+) -> tuple[Resolution, str]:
+    label = f"{os.fsdecode(path)}:{number}: resolution marker"
+    match = MARKER_RE.fullmatch(line)
+    if match is None:
+        raise OpenProblemError(f"{label} has malformed syntax")
+    version, payload = match.groups()
+    if version != "1":
+        raise OpenProblemError(f"{label} has unknown schema version {version}")
+    try:
+        record = json.loads(payload, object_pairs_hook=marker_object)
+    except (ValueError, RecursionError) as exc:
+        raise OpenProblemError(f"{label} has malformed JSON") from exc
+    if not isinstance(record, dict):
+        raise OpenProblemError(f"{label} payload must be a JSON object")
+    if set(record) != {"problem_slug", "declaration_gid", "resolution_kind"}:
+        raise OpenProblemError(f"{label} has missing or unknown keys")
+    slug, kind = record["problem_slug"], record["resolution_kind"]
+    gid = record["declaration_gid"]
+    if not isinstance(slug, str) or not SLUG_RE.fullmatch(slug):
+        raise OpenProblemError(f"{label} has an invalid problem slug")
+    if not isinstance(kind, str) or kind not in {"proved", "refuted"}:
+        raise OpenProblemError(f"{label} has an invalid resolution kind")
+    if not isinstance(gid, str) or not GID_RE.fullmatch(gid) or "." not in gid:
+        raise OpenProblemError(f"{label} has an invalid declaration GID")
+    if slug not in slugs:
+        raise OpenProblemError(f"{label} references unknown problem slug {slug}")
+    members = resolutions.get(slug, [])
+    if members:
+        if path != members[0].path:
+            raise OpenProblemError(f"{label} has duplicate resolution slug on another page: {slug}")
+        if kind != members[0].kind:
+            raise OpenProblemError(f"{label} has mixed resolution kinds for {slug}")
+        if any(member.declaration_gid == gid for member in members):
+            raise OpenProblemError(f"{label} has duplicate resolution declaration GID {gid}")
+    return Resolution(kind, gid, path, number), slug
 
 
 def frozen_state_date(upstream: Path, sha: str, state_path: bytes) -> str:
@@ -391,7 +434,34 @@ def markdown_text(text: str) -> str:
     return "".join("\\" + char if char in string.punctuation else char for char in text)
 
 
-def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) -> ProblemPage:
+def load_note(upstream: Path, entries: list[SourceEntry], bibkey: str) -> Note:
+    candidates = [entry for entry in entries
+                  if entry.path.startswith(b"Library/")
+                  and entry.path.count(b"/") == 2
+                  and entry.path.endswith(b"/" + bibkey.encode() + b".md")]
+    if len(candidates) != 1:
+        reason = "missing" if not candidates else "ambiguous"
+        raise OpenProblemError(f"{reason} Library bibkey {bibkey}")
+    if candidates[0].mode not in PUBLISHED_MODES:
+        raise OpenProblemError(f"Library bibkey {bibkey} must be a regular Git blob")
+    path, blob = input_blobs(upstream, candidates)[0]
+    fields, _ = front_matter(path, blob)
+    if set(fields) - {"url"} != LIBRARY_KEYS:
+        raise OpenProblemError(f"{os.fsdecode(path)}: missing or unknown Library metadata keys")
+    for key in sorted(LIBRARY_KEYS - {"strata_touched", "doi"}):
+        required_scalar(fields, key, path)
+    strata = fields["strata_touched"]
+    if not isinstance(strata, list):
+        raise OpenProblemError(f"{os.fsdecode(path)}: strata_touched must be a list")
+    if required_scalar(fields, "bibkey", path) != bibkey:
+        raise OpenProblemError(f"{os.fsdecode(path)}: bibkey/path mismatch")
+    doi, url = citation(fields, path)
+    return Note(path, fields["authors"], fields["year"], fields["title"], doi, url, fields["claim"])
+
+
+def derive_open_problems(
+    upstream: Path, sha: str, built_at: str | None = None, report: Report | None = None,
+) -> ProblemPage:
     entries = input_entries(upstream, sha)
     dossier_entries = []
     for entry in entries:
@@ -403,58 +473,57 @@ def derive_open_problems(upstream: Path, sha: str, built_at: str | None = None) 
             dossier_entries.append(entry)
     # Git orders filenames, where alpha-beta.md precedes alpha.md; order by slug.
     dossier_entries.sort(key=lambda entry: entry.path[:-3])
-    problems = parse_dossiers(input_blobs(upstream, dossier_entries))
-    notes: dict[str, tuple[bytes, str | None, str | None]] = {}
+    problems = parse_dossiers(input_blobs(upstream, dossier_entries), report)
+    notes: dict[str, Note] = {}
     for bibkey in sorted({problem.bibkey for problem in problems}):
-        candidates = [entry for entry in entries
-                      if entry.path.startswith(b"Library/")
-                      and entry.path.count(b"/") == 2
-                      and entry.path.endswith(b"/" + bibkey.encode() + b".md")]
-        if len(candidates) != 1:
-            reason = "missing" if not candidates else "ambiguous"
-            raise OpenProblemError(f"{reason} Library bibkey {bibkey}")
-        if candidates[0].mode not in PUBLISHED_MODES:
-            raise OpenProblemError(f"Library bibkey {bibkey} must be a regular Git blob")
-        path, blob = input_blobs(upstream, candidates)[0]
-        fields, _ = front_matter(path, blob)
-        if set(fields) - {"url"} != LIBRARY_KEYS:
-            raise OpenProblemError(f"{os.fsdecode(path)}: missing or unknown Library metadata keys")
-        for key in sorted(LIBRARY_KEYS - {"strata_touched", "doi"}):
-            required_scalar(fields, key, path)
-        strata = fields["strata_touched"]
-        if not isinstance(strata, list):
-            raise OpenProblemError(f"{os.fsdecode(path)}: strata_touched must be a list")
-        if required_scalar(fields, "bibkey", path) != bibkey:
-            raise OpenProblemError(f"{os.fsdecode(path)}: bibkey/path mismatch")
-        doi, url = citation(fields, path)
-        notes[bibkey] = Note(path, fields["authors"], fields["year"], fields["title"], doi, url,
-                             fields["claim"])
+        try:
+            notes[bibkey] = load_note(upstream, entries, bibkey)
+        except OpenProblemError as exc:
+            users = ", ".join(os.fsdecode(problem.path) for problem in problems
+                              if problem.bibkey == bibkey)
+            skip_or_raise(report, exc, f"left off the list: {users}")
+    listed = []
     for problem in problems:
-        note = notes[problem.bibkey]
+        note = notes.get(problem.bibkey)
+        if note is None:
+            continue
         # The note holds the source identity; every locator a dossier gives must equal the
         # note's locator of the same kind, while a note may hold locators the dossier omits.
         if any(given is not None and given != held
                for given, held in ((problem.doi, note.doi), (problem.url, note.url))):
-            raise OpenProblemError(
+            skip_or_raise(report, OpenProblemError(
                 f"{os.fsdecode(note.path)}: citation {(note.doi, note.url)!r} disagrees with "
                 f"{os.fsdecode(problem.path)}: citation {(problem.doi, problem.url)!r}"
-            )
+            ), "the problem is left off the list")
+            continue
+        listed.append(problem)
+    problems = listed
     blueprint = [entry for entry in entries
                  if entry.path.startswith(b"Blueprint/") and is_published_path(entry.path)
                  and entry.mode in PUBLISHED_MODES]
-    resolutions = parse_markers(input_blobs(upstream, blueprint), {p.slug for p in problems})
+    resolutions = parse_markers(input_blobs(upstream, blueprint), {p.slug for p in problems}, report)
     entry_by_path = {entry.path: entry for entry in entries}
     member_paths: dict[str, tuple[bytes, bytes]] = {}
-    for members in resolutions.values():
-        for member in members:
+    for slug in list(resolutions):
+        kept = []
+        for member in resolutions[slug]:
             module = member.declaration_gid.split(".", 1)[0].encode("ascii")
             page_path = b"Blueprint/" + module + b".md"
             state_path = b"Golden/Frozen/state/" + module + b".lean.json"
-            for target in (page_path, state_path):
-                entry = entry_by_path.get(target)
-                if entry is None or entry.mode not in PUBLISHED_MODES:
-                    raise OpenProblemError(f"missing current theorem page or frozen state: {os.fsdecode(target)}")
+            missing = [target for target in (page_path, state_path)
+                       if (entry := entry_by_path.get(target)) is None
+                       or entry.mode not in PUBLISHED_MODES]
+            if missing:
+                skip_or_raise(report, OpenProblemError(
+                    f"missing current theorem page or frozen state: {os.fsdecode(missing[0])}"
+                ), f"the record at {os.fsdecode(member.path)}:{member.line} is ignored")
+                continue
             member_paths[member.declaration_gid] = (page_path, state_path)
+            kept.append(member)
+        if kept:
+            resolutions[slug] = tuple(kept)
+        else:
+            del resolutions[slug]
     input_blobs(upstream, [entry_by_path[state] for state in
                            sorted({state for _, state in member_paths.values()})])
     frozen_dates = {

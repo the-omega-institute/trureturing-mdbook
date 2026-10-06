@@ -24,6 +24,16 @@ and a provenance record. It then
 builds with pinned mdBook, KaTeX under Node and Pagefind Extended, and deploys only after the source
 set, page mapping, math output, relative links and artifact size all pass their gates.
 
+A defect in one upstream page does not keep the site from publishing. The affected unit is
+shown in a degraded form and the build log carries a GitHub warning naming the upstream
+file to fix: a formula KaTeX cannot render is shown as its TeX source; an anchor whose
+relative target is malformed, leaves the site or does not exist keeps its text but loses its
+link; unpaired `$$` delimiters stay as text; and a dossier, reading note or resolution record
+the problem page cannot interpret is left out of that page (the files themselves are still
+published). Failures that do not belong to one upstream file — Git reads, the projected source
+set, page mappings, provenance, tool versions, missing non-anchor resources and the artifact
+size — still stop the build.
+
 The generator also owns `information-escape.md`, an English static worked route titled
 “What can these observations distinguish?”. Its four-state table and fixed-catalog comparison
 are educational enumeration, not a new theorem or a certified judge run. The chapter, home
@@ -81,7 +91,8 @@ Formulas are rendered by `scripts/render_katex.py`, an mdBook preprocessor that 
 and renders them all in one Node process with the KaTeX package pinned in `package-lock.json`.
 It replaced mdbook-katex, whose embedded QuickJS runtime has a 256 KiB stack: a theorem page
 with a few hundred nested `\left…\right` groups made it keep the source text, which the
-release gate then refused. A formula KaTeX rejects fails the build and names the page.
+release gate then refused. A formula KaTeX cannot render is shown as its source, with a
+warning naming the page.
 
 Before rendering, the prose preprocessor escapes link-shaped mathematical notation such as
 `mu_H[d](univ)` and standalone powered coefficient expressions such as
@@ -89,7 +100,7 @@ Before rendering, the prose preprocessor escapes link-shaped mathematical notati
 The latter requires a coefficient selector, an algebraic factor and an
 immediately following power; URL and file-path characters do not qualify. The transformation
 runs in memory, leaving copied upstream Markdown intact, and preserves code and math regions.
-The release gate still rejects broken relative links.
+Relative anchors are checked after rendering, as described next.
 
 After mdBook renders, `render_source_links.py` turns relative anchors to existing,
 unpublished upstream files (for example `.lean` source) into GitHub blob permalinks at
@@ -97,8 +108,11 @@ the SHA in the source and book provenance. This includes mdBook's rebased links 
 `print.html`. Only exact paths to regular files in that Git tree qualify; missing paths
 are never inferred from alternate extensions. Published-page navigation and local resources
 stay relative. Query strings and fragments are retained. Only rendered anchor attributes
-change; copied upstream Markdown and all other HTML bytes stay intact. This step runs before
-Pagefind and the unchanged release gate, which still rejects missing relative resources.
+change; copied upstream Markdown and all other HTML bytes stay intact. An anchor whose relative
+target is malformed, leaves the site or names no file in the book loses its `href`, with a
+warning naming the page (`print.html` repeats every chapter, so it is fixed silently). This step
+runs before Pagefind and the release gate, which still rejects any other missing relative
+resource.
 
 Next, `search_titles.py` reads native rendered HTML head titles without changing the pages.
 It preserves the full title, including mdBook's book suffix, and omits absent or blank titles.
@@ -167,7 +181,7 @@ including `: `, `#`, quotes and flow characters, is the whole text verbatim. Onl
 markers (`|`, `>` and their chomping forms), values that are not one canonical non-empty line
 after decoding, and forbidden characters fail. Unsupported YAML syntax, missing or unknown
 keys, duplicate keys, path/slug disagreement, and duplicate or out-of-order dossier
-slugs fail the build. Each bibkey must select exactly one regular Library note with
+slugs are rejected. Each bibkey must select exactly one regular Library note with
 the current closed Library key set (also allowing optional `url`). The note holds the source
 identity: every DOI or URL the dossier gives must equal the note's value of the same kind,
 byte for byte, while the note may hold a locator the dossier omits. The `doi` key is required
@@ -195,16 +209,19 @@ such as `D5/S1/Words/Sumfree/GreedyThreeSumfreeTwoParameter.conjecture17`.
 Any occurrence of the reserved marker prefix must have valid syntax, version, and
 payload, even in a Markdown code example. Slugs must exist in the dossier set. Distinct
 member GIDs for one slug may appear on the same Blueprint page with the same kind;
-repeated members, mixed kinds and a second source page fail the build. One slug counts
+repeated members, mixed kinds and a second source page are rejected. One slug counts
 as one solved problem, while the marker count counts member records. Markers may follow
 the producer's document/theorem order; the display remains ordered by dossier slug
-within each section. Violations fail the build.
+within each section. A rejected dossier or reading note leaves its problems off the list, and a
+rejected record is ignored; each is reported as a warning while the rest of the page is built.
+Problem inputs that are not regular files directly under `Problems/` still stop the build.
 
 These comments are records, not validated typed claims: ordinary narrative can emit
 identical bytes. The page does not consume a Describe report, establish repository
 validity, or validate Lean proofs. Each theorem link displays only the declaration name
 (for example, `conjecture17`) and points to that member GID's Blueprint module page.
-The reader requires that page and its frozen-state file in the captured snapshot. Upstream owns
+A record whose page or frozen-state file is missing from the captured snapshot is reported and
+ignored. Upstream owns
 the checks that a marker resolves uniquely to a currently frozen, theorem-like declaration.
 No matching marker means this repository has no recorded resolution binding
 in that Markdown snapshot; it says nothing about whether the problem is still open
@@ -225,7 +242,7 @@ git log --diff-filter=A --format=%cs --reverse --no-renames "$SHA" -- \
 ```
 
 The first output line supplies the date, including if the file was later deleted
-and re-added. Missing history, Git failures and malformed dates fail the build.
+and re-added. Git failures and malformed dates fail the build.
 The workflow's non-shallow `fetch --filter=blob:none` and sparse checkout retain this history
 even with only `Blueprint Problems Library` checked out; `Golden/` need not be
 materialized. The same publication predicate selects source blobs, changelog paths

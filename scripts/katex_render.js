@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Render a JSON array of {tex, display} from stdin to a JSON array of HTML strings.
 // KaTeX runs in Node's V8, whose stack is not the 256 KiB QuickJS budget that made
-// mdbook-katex give up on deeply nested formulas. A formula KaTeX cannot parse (for
-// example a paper-local macro in a verbatim quote) is reported as a failure and its
-// slot left null for the caller's fallback; any other error stops the build.
+// mdbook-katex give up on deeply nested formulas. A formula KaTeX cannot render (a
+// paper-local macro in a verbatim quote, or a character KaTeX has no font metrics
+// for) is reported as a failure and its slot left null for the caller's fallback.
 "use strict";
 
 const fs = require("fs");
@@ -31,13 +31,8 @@ for (const [index, item] of items.entries()) {
       output: "html",
     }));
   } catch (error) {
-    if (error instanceof katex.ParseError) {
-      rendered.push(null);
-      failures.push({ index, message: error.message });
-      continue;
-    }
-    process.stderr.write(`katex-render: formula ${index}: ${error && error.message ? error.message : error}\n`);
-    process.exit(1);
+    rendered.push(null);
+    failures.push({ index, message: error && error.message ? error.message : String(error) });
   }
 }
 process.stdout.write(JSON.stringify({ version: katex.version, html: rendered, failures }));
