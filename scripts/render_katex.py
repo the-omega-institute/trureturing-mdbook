@@ -6,10 +6,10 @@ on deeply nested formulas and then keeps the source text, which the release gate
 refuses. The spans come from ``math_scan`` — the same scanner the verifier counts
 with — and every formula is rendered in one Node process.
 
-A formula KaTeX cannot parse does not stop the site: it is shown as its TeX source in
+A formula KaTeX cannot render does not stop the site: it is shown as its TeX source in
 a ``katex-fallback`` code element, which the verifier counts in place of a KaTeX node,
-and the build log carries a GitHub warning naming the chapter and formula. Any other
-renderer failure still fails the build.
+and the build log carries a GitHub warning naming the chapter and formula. A renderer
+process that cannot run or answers inconsistently still fails the build.
 """
 
 from __future__ import annotations
@@ -22,8 +22,10 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from build_warnings import workflow_warning
     from math_scan import math_spans
 except ModuleNotFoundError:
+    from scripts.build_warnings import workflow_warning
     from scripts.math_scan import math_spans
 
 KATEX_VERSION = "0.16.4"
@@ -74,14 +76,11 @@ def fallback_html(tex: str, display: bool) -> str:
 
 
 def warning_line(where: str, formula_index: int, message: str) -> str:
-    # GitHub workflow command; %, CR and LF must be escaped in the message.
-    text = f"{where}: formula {formula_index}: {message}"
-    text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-    return f"::warning title=KaTeX fallback::{text}"
+    return workflow_warning("KaTeX fallback", f"{where}: formula {formula_index}: {message}")
 
 
 def render_formulas(formulas: list[tuple[str, bool]]) -> tuple[list[str | None], list[dict[str, Any]]]:
-    """Return KaTeX HTML per formula (``None`` where KaTeX could not parse it) and the failures."""
+    """Return KaTeX HTML per formula (``None`` where KaTeX could not render it) and the failures."""
     if not formulas:
         return [], []
     payload = json.dumps([{"tex": tex, "display": display} for tex, display in formulas])

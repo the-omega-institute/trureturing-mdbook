@@ -16,11 +16,13 @@ from pathlib import Path
 from urllib.parse import unquote_to_bytes, urlsplit
 
 try:
+    from build_warnings import warn
     from site_freshness import generator_revision, provenance_is_usable
     from math_scan import math_spans
     from open_problems import PAGE_PATH, OpenProblemError, derive_open_problems
     from source_tree import is_published_path, list_source_entries
 except ModuleNotFoundError:
+    from scripts.build_warnings import warn
     from scripts.site_freshness import generator_revision, provenance_is_usable
     from scripts.math_scan import math_spans
     from scripts.open_problems import PAGE_PATH, OpenProblemError, derive_open_problems
@@ -202,11 +204,15 @@ def validate_math(
     all_katex_pages = 0
     for html_path in all_html:
         content = bytes_path(book, html_path).read_bytes()
-        residual += content.count(b"$$")
+        count = content.count(b"$$")
+        # An unpaired $$ in one upstream page is shown as text; the page is still published.
+        # print.html repeats every chapter, so only the chapter is reported.
+        if count and html_path != b"print.html":
+            warn("Unrendered math", f"{os.fsdecode(html_path[:-5])}.md: "
+                 f"{count} '$$' delimiters left as text")
+        residual += count
         if KATEX_MARKER in content:
             all_katex_pages += 1
-    if residual:
-        raise VerificationError(f"rendered HTML contains {residual} residual '$$' delimiters")
 
     expected_tokens: dict[bytes, int] = {
         path: markdown_math_token_count(bytes_path(source, path).read_bytes())
@@ -352,7 +358,10 @@ def verify(upstream: Path, source: Path, book: Path) -> dict[str, object]:
         raise VerificationError("provenance file_count does not match the projected source set")
 
     try:
-        problem_page = derive_open_problems(upstream, sha, str(provenance["built_at"]))
+        # The producer already reported each input it left out; regenerate the same page quietly.
+        problem_page = derive_open_problems(
+            upstream, sha, str(provenance["built_at"]), report=lambda _message: None,
+        )
     except OpenProblemError as exc:
         raise VerificationError(str(exc)) from exc
     problem_source = bytes_path(source, PAGE_PATH)

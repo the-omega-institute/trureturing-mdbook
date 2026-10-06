@@ -17,6 +17,7 @@
 !/scripts/
 /scripts/*
 !/scripts/build-site.py
+!/scripts/build_warnings.py
 !/scripts/escape_pseudo_links.py
 !/scripts/source_tree.py
 !/scripts/open_problems.py

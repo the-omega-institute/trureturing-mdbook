@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 from html import escape
+import io
 import json
 import os
 import shutil
@@ -43,6 +45,15 @@ class SourceLinksTests(unittest.TestCase):
         self.html("print.html", f'<p>正式代码见 <a href="{SOURCE}">ResidualPermutationSign.lean</a>。</p>\n'
                   '<a href="Blueprint/Guide.html#guide">Guide</a>\n')
 
+    @contextlib.contextmanager
+    def captured_warnings(self):
+        stream = io.StringIO()
+        warnings: list[str] = []
+        with contextlib.redirect_stderr(stream):
+            yield warnings
+        warnings.extend(line for line in stream.getvalue().splitlines()
+                        if line.startswith("::warning "))
+
     def html(self, path, content):
         destination = self.book / path
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -63,7 +74,7 @@ class SourceLinksTests(unittest.TestCase):
             check=True, capture_output=True, text=True,
         )
         self.assertEqual(json.loads(result.stdout), {
-            "upstream_sha": self.sha, "rewritten_anchors": 2,
+            "upstream_sha": self.sha, "rewritten_anchors": 2, "unlinked_anchors": 0,
             "changed_pages": [self.chapter, "print.html"],
         })
         for path, old_href in ((self.chapter, "../../" + SOURCE), ("print.html", SOURCE)):
@@ -88,10 +99,12 @@ class SourceLinksTests(unittest.TestCase):
         self.assertIn(self.permalink(), (self.book / "print.html").read_text())
         self.assertEqual(fixtures.verify_site.verify(self.upstream, self.output, self.book)["upstream_sha"], self.sha)
         self.html("future.html", '<a href="D5/Future.lean">Future</a>')
-        links.render_source_links(self.upstream, self.output, self.book)
-        self.assertEqual((self.book / "future.html").read_text(), '<a href="D5/Future.lean">Future</a>')
-        with self.assertRaisesRegex(fixtures.verify_site.VerificationError, "broken relative"):
-            fixtures.verify_site.verify(self.upstream, self.output, self.book)
+        with self.captured_warnings() as warnings:
+            links.render_source_links(self.upstream, self.output, self.book)
+        # Never a permalink into the later revision: outside the snapshot it is a missing target.
+        self.assertEqual((self.book / "future.html").read_text(), '<a>Future</a>')
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(fixtures.verify_site.verify(self.upstream, self.output, self.book)["upstream_sha"], self.sha)
 
     def test_general_regular_files_and_encoded_paths_keep_query_and_fragment(self):
         self.prepare()
@@ -133,7 +146,7 @@ class SourceLinksTests(unittest.TestCase):
         expected = expected.replace(f"href={SOURCE}", f'href="{self.permalink()}"')
         self.assertEqual((self.book / "syntax.html").read_bytes(), expected.encode())
 
-    def test_missing_targets_symlinks_and_embedded_resources_still_fail(self):
+    def test_anchors_to_missing_targets_become_plain_text_with_a_warning(self):
         self.prepare()
         os.symlink(SOURCE, self.upstream / "source-symlink.lean")
         sha = self.commit("symlink is not a regular blob", "2026-09-10T01:00:00Z")
@@ -141,10 +154,32 @@ class SourceLinksTests(unittest.TestCase):
         for href in ("D5/Missing.lean", "source-symlink.lean", SOURCE + "/", "Guide.html"):
             with self.subTest(href=href):
                 self.assertIsNone(links.source_permalink(href, b"missing.html", self.book, paths, sha))
-                self.html("missing.html", f'<a href="{href}">Missing</a>')
-                links.render_source_links(self.upstream, self.output, self.book)
-                with self.assertRaisesRegex(fixtures.verify_site.VerificationError, "broken relative"):
-                    fixtures.verify_site.validate_links(self.book, [b"missing.html"])
+                self.html("missing.html", f'<p>see <a href="{href}">Missing</a>.</p>')
+                with self.captured_warnings() as warnings:
+                    result = links.render_source_links(self.upstream, self.output, self.book)
+                self.assertEqual((self.book / "missing.html").read_text(), "<p>see <a>Missing</a>.</p>")
+                self.assertEqual(result["unlinked_anchors"], 1)
+                self.assertEqual(len(warnings), 1)
+                self.assertIn(f"missing.md: link target does not exist: {href}", warnings[0])
+                fixtures.verify_site.validate_links(self.book, [b"missing.html"])
+
+    def test_malformed_and_escaping_anchors_become_plain_text_with_a_warning(self):
+        self.prepare()
+        # Upstream 53a7d68f: a formula split over two lines left "](|\psi\rangle...|)".
+        for href in ("|\\psi\\rangle\\langle\\psi|", "../../../" + SOURCE, "%2f" + SOURCE):
+            with self.subTest(href=href):
+                self.html("Library/bad.html", f'<a href="{escape(href, quote=True)}">x</a>')
+                self.html("print.html", f'<a href="Library/{escape(href, quote=True)}">x</a>')
+                with self.captured_warnings() as warnings:
+                    result = links.render_source_links(self.upstream, self.output, self.book)
+                self.assertEqual((self.book / "Library/bad.html").read_text(), "<a>x</a>")
+                self.assertEqual(result["unlinked_anchors"], 2)
+                # print.html repeats every chapter, so only the chapter is reported.
+                self.assertEqual(len(warnings), 1)
+                self.assertIn("Library/bad.md:", warnings[0])
+
+    def test_resources_other_than_anchors_still_fail_the_gate(self):
+        self.prepare()
         self.html("embedded.html", f'<img src="{SOURCE}">')
         links.render_source_links(self.upstream, self.output, self.book)
         with self.assertRaisesRegex(fixtures.verify_site.VerificationError, "broken relative"):

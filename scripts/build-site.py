@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import quote_from_bytes
 
 try:
+    from build_warnings import warn
     from math_scan import outside_fences
     from render_source_links import SourceLinkError, regular_source_paths
     from search_titles import search_bootstrap
@@ -31,6 +32,7 @@ try:
         list_source_entries as read_source_entries,
     )
 except ModuleNotFoundError:
+    from scripts.build_warnings import warn
     from scripts.math_scan import outside_fences
     from scripts.render_source_links import SourceLinkError, regular_source_paths
     from scripts.search_titles import search_bootstrap
@@ -649,7 +651,9 @@ to explore the definitions and develop a contribution with Claude Code or Codex.
 
 def build_open_problems(upstream: Path, sha: str, built_at: str) -> str:
     try:
-        return derive_open_problems(upstream, sha, built_at).markdown
+        return derive_open_problems(
+            upstream, sha, built_at, report=lambda message: warn("Open problems", message),
+        ).markdown
     except OpenProblemError as exc:
         raise BuildError(str(exc)) from exc
 

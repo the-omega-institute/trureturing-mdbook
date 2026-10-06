@@ -710,6 +710,28 @@ class VerifySiteTests(unittest.TestCase):
         with self.assertRaisesRegex(verify_site.VerificationError, "broken relative"):
             verify_site.validate_links(self.book, [b"index.html"])
 
+    def test_residual_double_dollars_warn_without_failing_the_site(self) -> None:
+        import contextlib, io
+        source = self.book / "source"
+        book = self.book / "book"
+        (source / "Blueprint").mkdir(parents=True)
+        (book / "Blueprint").mkdir(parents=True)
+        (source / "Blueprint/Page.md").write_text("good $x$\n", encoding="utf-8")
+        (book / "Blueprint/Page.html").write_text(
+            '<span class="katex">x</span> cost $$ left $$', encoding="utf-8"
+        )
+        (book / "print.html").write_text("cost $$ left $$", encoding="utf-8")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            result = verify_site.validate_math(
+                source, book, {b"Blueprint/Page.md"},
+                [b"Blueprint/Page.html", b"print.html"],
+            )
+        self.assertEqual(result["residual_double_dollars"], 4)
+        warnings = [line for line in stderr.getvalue().splitlines() if line.startswith("::warning ")]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Blueprint/Page.md: 2 '$$' delimiters left as text", warnings[0])
+
     def test_partial_math_rendering_fails_closed(self) -> None:
         source = self.book / "source"
         book = self.book / "book"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -75,16 +77,32 @@ class OpenProblemTests(unittest.TestCase):
         self.write("Problems/gamma.md", self.dossier("gamma", "theorem"))
         return self.commit("proved, refuted, and unrecorded problems", "2026-07-07T09:00:00+00:00")
 
-    def check_rejected(self, path: str, value: str, diagnostic: str) -> None:
+    def build_with_warnings(self) -> list[str]:
+        stream = io.StringIO()
+        with contextlib.redirect_stderr(stream):
+            build_site.build_site(self.upstream, self.output)
+        return [line for line in stream.getvalue().splitlines()
+                if line.startswith("::warning title=Open problems::")]
+
+    def check_reported(self, path: str, value: str, diagnostic: str) -> list[str]:
+        """The input is left out with a warning, and the rest of the site is still built."""
+        self.write(path, value)
+        self.commit("invalid open problem input", "2026-07-07T09:00:00+00:00")
+        warnings = self.build_with_warnings()
+        self.assertTrue(any(re.search(diagnostic, warning) for warning in warnings),
+                        f"no warning matches {diagnostic!r}: {warnings}")
+        self.assertTrue((self.output / "open-problems.md").is_file())
+        return warnings
+
+    def check_fatal(self, path: str, value: str, diagnostic: str) -> None:
         self.write(path, value)
         self.commit("invalid open problem input", "2026-07-07T09:00:00+00:00")
         with self.assertRaisesRegex(build_site.BuildError, diagnostic):
             build_site.build_site(self.upstream, self.output)
-        self.assertFalse(self.output.exists())
 
     def test_rejects_unknown_marker_version(self) -> None:
         self.fixture()
-        self.check_rejected(
+        self.check_reported(
             "Blueprint/D5/S1/Example.md", self.marker().replace("-v1 ", "-v2 "),
             "marker.*version",
         )
@@ -107,28 +125,28 @@ class OpenProblemTests(unittest.TestCase):
 
     def test_rejects_four_key_marker(self) -> None:
         self.fixture()
-        self.check_rejected(
+        self.check_reported(
             "Blueprint/D5/S1/Example.md", self.marker().replace('}', ', "extra": true}'),
             "missing or unknown keys",
         )
 
     def test_rejects_unknown_marker_key(self) -> None:
         self.fixture()
-        self.check_rejected(
+        self.check_reported(
             "Blueprint/D5/S1/Example.md", self.marker().replace('"declaration_gid"', '"gid"'),
             "missing or unknown keys",
         )
 
     def test_rejects_empty_declaration_gid(self) -> None:
         self.fixture()
-        self.check_rejected("Blueprint/D5/S1/Example.md", self.marker(gid=""), "invalid declaration GID")
+        self.check_reported("Blueprint/D5/S1/Example.md", self.marker(gid=""), "invalid declaration GID")
 
     def test_rejects_noncanonical_declaration_gid(self) -> None:
         self.fixture()
         for gid in (None, 42, [], "Example.theorem17", "D5/S1/Example", "D5/S1/../Example.t",
                     "D5/S1/Example.t ", "D5/S1/Example..t", "D5/S1/Example.t#anchor"):
             with self.subTest(gid=gid):
-                self.check_rejected(
+                self.check_reported(
                     "Blueprint/D5/S1/Example.md", self.marker(gid=gid), "invalid declaration GID",
                 )
 
@@ -336,11 +354,14 @@ class OpenProblemTests(unittest.TestCase):
                     self.assertTrue(projected.is_file(), target)
                     self.assertEqual(projected.read_bytes(), (self.upstream / target).read_bytes())
 
-    def test_missing_frozen_state_history_is_an_error(self) -> None:
+    def test_record_without_frozen_state_is_ignored_with_a_warning(self) -> None:
         self.fixture(self.marker(), frozen=False)
-        with self.assertRaisesRegex(build_site.BuildError, "missing current theorem page or frozen state.*Golden/Frozen/state/D5/S1/Example.lean.json"):
-            build_site.build_site(self.upstream, self.output)
-        self.assertFalse(self.output.exists())
+        warnings = self.build_with_warnings()
+        self.assertEqual(len(warnings), 1)
+        self.assertRegex(warnings[0], "missing current theorem page or frozen state: Golden/Frozen/state/D5/S1/Example.lean.json"
+                         "; the record at Blueprint/D5/S1/Example.md:3 is ignored")
+        self.assertIn("**0 of 2 solved in this repository.**",
+                      (self.output / "open-problems.md").read_text(encoding="utf-8"))
 
     def test_frozen_state_git_error_is_an_error(self) -> None:
         from scripts import open_problems
@@ -374,13 +395,17 @@ class OpenProblemTests(unittest.TestCase):
         self.write("Golden/Frozen/state/D5/S1/Example.lean.json", '{"statement_id":"later"}\n')
         self.commit("freeze after snapshot", "2026-07-08T09:00:00+00:00")
         with mock.patch.object(build_site, "capture_upstream_sha", return_value=sha):
-            with self.assertRaisesRegex(build_site.BuildError, "missing current theorem page or frozen state"):
-                build_site.build_site(self.upstream, self.output)
+            warnings = self.build_with_warnings()
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("missing current theorem page or frozen state", warnings[0])
+        self.assertNotIn("frozen in this repository 2026-07-08",
+                         (self.output / "open-problems.md").read_text(encoding="utf-8"))
 
     def test_resolution_link_and_frozen_path_require_member_module(self) -> None:
         self.fixture(self.marker(gid="D5/S1/DifferentName.Namespace.theorem17"))
-        with self.assertRaisesRegex(build_site.BuildError, "missing current theorem page or frozen state.*DifferentName.md"):
-            build_site.build_site(self.upstream, self.output)
+        warnings = self.build_with_warnings()
+        self.assertEqual(len(warnings), 1)
+        self.assertRegex(warnings[0], "missing current theorem page or frozen state.*DifferentName.md")
 
     def test_two_member_resolution_links_and_dates_each_theorem_and_counts_one_problem(self) -> None:
         self.write("Golden/Frozen/state/D5/S1/Other.lean.json", '{"statement_id":"other"}\n')
@@ -405,8 +430,8 @@ class OpenProblemTests(unittest.TestCase):
             (self.marker(kind="refuted", gid="D5/S1/Example.other"), "mixed resolution kinds"),
         ):
             with self.subTest(diagnostic=diagnostic):
-                self.check_rejected("Blueprint/D5/S1/Example.md", self.marker() + marker, diagnostic)
-        self.check_rejected("Blueprint/D5/S1/Example.md",
+                self.check_reported("Blueprint/D5/S1/Example.md", self.marker() + marker, diagnostic)
+        self.check_reported("Blueprint/D5/S1/Example.md",
                             self.marker() + self.marker(gid="D5/S1/Missing.other"),
                             "missing current theorem page or frozen state.*Missing.md")
 
@@ -444,7 +469,7 @@ class OpenProblemTests(unittest.TestCase):
         self.fixture()
         for payload in ('[]', 'null', 'true', '42', '"alpha"'):
             with self.subTest(payload=payload):
-                self.check_rejected(
+                self.check_reported(
                     "Blueprint/D5/S1/Example.md",
                     f"<!-- scribe-open-problem-resolution-v1 {payload} -->\n",
                     "marker.*object",
@@ -458,7 +483,7 @@ class OpenProblemTests(unittest.TestCase):
             '{"problem_slug":"alpha","problem_slug":"beta","resolution_kind":"proved"}',
         ):
             with self.subTest(payload=payload):
-                self.check_rejected(
+                self.check_reported(
                     "Blueprint/D5/S1/Example.md",
                     f"<!-- scribe-open-problem-resolution-v1 {payload} -->\n",
                     "marker.*(keys|key)",
@@ -476,15 +501,15 @@ class OpenProblemTests(unittest.TestCase):
             "prefix " + self.marker(),
         ):
             with self.subTest(marker=marker):
-                self.check_rejected("Blueprint/D5/S1/Example.md", marker, "marker")
+                self.check_reported("Blueprint/D5/S1/Example.md", marker, "marker")
 
     def test_rejects_marker_for_unknown_problem(self) -> None:
         self.fixture()
-        self.check_rejected("Blueprint/D5/S1/Example.md", self.marker("missing"), "unknown.*slug")
+        self.check_reported("Blueprint/D5/S1/Example.md", self.marker("missing"), "unknown.*slug")
 
     def test_rejects_duplicate_resolution_slugs_across_pages(self) -> None:
         self.fixture(self.marker())
-        self.check_rejected("Blueprint/Other.md", self.marker(kind="refuted"), "duplicate.*slug")
+        self.check_reported("Blueprint/Other.md", self.marker(kind="refuted"), "duplicate.*slug")
 
     def test_solved_entries_are_listed_newest_freeze_first_then_by_slug(self) -> None:
         # alpha's module froze first; beta's and gamma's froze together two days later.
@@ -542,11 +567,11 @@ class OpenProblemTests(unittest.TestCase):
             original.replace("\n", "\r\n"), "\ufeff" + original,
         ):
             with self.subTest(dossier=dossier):
-                self.check_rejected("Problems/alpha.md", dossier, "Problems/alpha.md")
+                self.check_reported("Problems/alpha.md", dossier, "Problems/alpha.md")
 
     def test_rejects_retired_arxiv_id_key(self) -> None:
         self.fixture()
-        self.check_rejected(
+        self.check_reported(
             "Problems/alpha.md",
             self.dossier().replace("doi: 10.48550/arXiv.2601.12345", "arxiv_id: 2601.12345"),
             "unsupported problem schema; expected slug, bibkey, doi, triage, motivation_gids",
@@ -554,7 +579,7 @@ class OpenProblemTests(unittest.TestCase):
 
     def test_rejects_arxiv_id_alongside_doi(self) -> None:
         self.fixture()
-        self.check_rejected(
+        self.check_reported(
             "Problems/alpha.md",
             self.dossier().replace("triage: window", "arxiv_id: 2601.12345\ntriage: window"),
             "unsupported problem schema; expected slug, bibkey, doi, triage, motivation_gids",
@@ -589,7 +614,7 @@ class OpenProblemTests(unittest.TestCase):
 
     def test_rejects_doi_case_mismatch(self) -> None:
         self.fixture()
-        self.check_rejected(
+        self.check_reported(
             "Problems/alpha.md", self.dossier(doi="10.48550/arxiv.2601.12345"),
             re.escape(
                 "Library/Words/paper2026.md: citation ('10.48550/arXiv.2601.12345', None) disagrees with "
@@ -597,12 +622,16 @@ class OpenProblemTests(unittest.TestCase):
             ),
         )
 
-    def test_rejects_non_utf8_dossier(self) -> None:
+    def test_reports_non_utf8_dossier(self) -> None:
         self.fixture()
         (self.upstream / "Problems/alpha.md").write_bytes(b"\xff\n")
         self.commit("invalid encoding", "2026-07-07T09:00:00+00:00")
-        with self.assertRaisesRegex(build_site.BuildError, "UTF-8"):
-            build_site.build_site(self.upstream, self.output)
+        warnings = self.build_with_warnings()
+        self.assertEqual(len(warnings), 1)
+        self.assertRegex(warnings[0], "Problems/alpha.md: .*UTF-8.*left off the list")
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        self.assertNotIn("### Problem alpha", page)
+        self.assertIn("### Problem beta", page)
 
     def test_rejects_unsafe_or_nested_problem_inputs(self) -> None:
         self.fixture()
@@ -614,9 +643,9 @@ class OpenProblemTests(unittest.TestCase):
             build_site.build_site(self.upstream, self.output)
         path.unlink()
         self.write("Problems/alpha.md", self.dossier())
-        self.check_rejected("Problems/nested/extra.md", self.dossier("extra"), "problem.*path")
+        self.check_fatal("Problems/nested/extra.md", self.dossier("extra"), "problem.*path")
 
-    def test_rejects_missing_duplicate_or_inconsistent_literature(self) -> None:
+    def test_reports_missing_duplicate_or_inconsistent_literature(self) -> None:
         self.fixture()
         for note in (
             self.library().replace("doi: 10.48550/arXiv.2601.12345\n", ""),
@@ -625,63 +654,41 @@ class OpenProblemTests(unittest.TestCase):
             self.library().replace("bibkey: paper2026", "bibkey: wrong2026"),
         ):
             with self.subTest(note=note):
-                self.check_rejected("Library/Words/paper2026.md", note, "Library/Words/paper2026.md")
+                self.check_reported("Library/Words/paper2026.md", note, "Library/Words/paper2026.md")
         self.write("Library/Words/paper2026.md", self.library())
-        self.check_rejected("Library/Other/paper2026.md", self.library(), "ambiguous.*bibkey")
+        self.check_reported("Library/Other/paper2026.md", self.library(), "ambiguous.*bibkey")
         (self.upstream / "Library/Words/paper2026.md").unlink()
         (self.upstream / "Library/Other/paper2026.md").unlink()
         self.commit("missing library note", "2026-07-08T09:00:00+00:00")
-        with self.assertRaisesRegex(build_site.BuildError, "missing.*bibkey"):
-            build_site.build_site(self.upstream, self.output)
+        warnings = self.build_with_warnings()
+        self.assertEqual(len(warnings), 1)
+        self.assertRegex(warnings[0], "missing Library bibkey paper2026; left off the list: "
+                                      "Problems/alpha.md, Problems/beta.md")
 
-    def check_library_rejected_without_replacement(
+    def check_library_reported(
         self, old: str, new: str, diagnostic: str = "unsupported front matter scalar",
     ) -> None:
+        """A bad reading note leaves its problems off the list; everything else is published."""
         self.fixture()
-        build_site.build_site(self.upstream, self.output)
-
-        def snapshot():
-            return {
-                path.relative_to(self.output).as_posix(): path.read_bytes()
-                for path in self.output.rglob("*") if path.is_file()
-            }
-
-        original = snapshot()
-        self.assertIn(b"**0 of 2 solved in this repository.**", original["open-problems.md"])
         self.assertIn(old, self.library())
         self.assertNotEqual(old, new)
         self.write("Library/Words/paper2026.md", self.library().replace(old, new, 1))
-        sha = self.commit("malformed Library front matter", "2026-07-07T09:00:00+00:00")
+        self.commit("malformed Library front matter", "2026-07-07T09:00:00+00:00")
         diagnostic = "Library/Words/paper2026.md: " + diagnostic
-        with self.assertRaisesRegex(build_site.BuildError, re.escape(diagnostic)) as caught:
-            build_site.build_site(self.upstream, self.output)
-        self.assertIsInstance(caught.exception.__cause__, build_site.OpenProblemError)
-        self.assertEqual(snapshot(), original)
-
         completed = subprocess.run(
             [sys.executable, os.fspath(build_site.__file__), str(self.upstream), str(self.output)],
             capture_output=True, text=True,
         )
-        self.assertEqual(completed.returncode, 1)
-        self.assertIn("build-site: " + diagnostic, completed.stderr)
-        self.assertEqual(completed.stdout, "")
-        self.assertEqual(snapshot(), original)
-
-        # Pin a separate candidate to the bad input so verification reaches the
-        # shared reader without changing the previously valid projection.
-        with tempfile.TemporaryDirectory(dir=self.root) as temporary:
-            candidate = Path(temporary) / "source"
-            shutil.copytree(self.output, candidate)
-            provenance = json.loads(original["provenance.json"])
-            provenance["upstream_sha"] = sha
-            (candidate / "provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
-            (candidate / "Library/Words/paper2026.md").write_bytes(
-                (self.upstream / "Library/Words/paper2026.md").read_bytes()
-            )
-            with self.assertRaisesRegex(verify_site.VerificationError, re.escape(diagnostic)) as caught:
-                verify_site.verify(self.upstream, candidate, Path(temporary) / "book")
-            self.assertIsInstance(caught.exception.__cause__, verify_site.OpenProblemError)
-        self.assertEqual(snapshot(), original)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        warnings = [line for line in completed.stderr.splitlines()
+                    if line.startswith("::warning title=Open problems::")]
+        self.assertEqual(len(warnings), 1, warnings)
+        self.assertIn(diagnostic, warnings[0])
+        self.assertIn("left off the list: Problems/alpha.md, Problems/beta.md", warnings[0])
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        self.assertIn("**0 of 0 solved in this repository.**", page)
+        # The note itself is still published as an ordinary page.
+        self.assertTrue((self.output / "Library/Words/paper2026.md").is_file())
 
     def test_accepts_library_scalars_that_upstream_accepts_verbatim(self) -> None:
         # 2026-09-17: `title: Egg Drop Problems: They Are All They Are Cracked Up To Be!`
@@ -699,8 +706,8 @@ class OpenProblemTests(unittest.TestCase):
         self.assertIn("**0 of 2 solved in this repository.**", page)
         self.assertEqual(page.count("[Reading note](Library/Words/paper2026.md)"), 2)
 
-    def test_rejects_library_empty_title_without_replacing_projection(self) -> None:
-        self.check_library_rejected_without_replacement(
+    def test_reports_library_empty_title(self) -> None:
+        self.check_library_reported(
             "title: Example paper", "title:", "title must be a nonempty scalar",
         )
 
@@ -719,26 +726,28 @@ class OpenProblemTests(unittest.TestCase):
                 with self.assertRaisesRegex(OpenProblemError, "motivation_gids"):
                     parse_dossiers([(b"Problems/alpha.md", dossier.encode())])
 
-    def test_rejects_library_scalar_strata_without_replacing_projection(self) -> None:
-        self.check_library_rejected_without_replacement(
+    def test_reports_library_scalar_strata(self) -> None:
+        self.check_library_reported(
             "strata_touched:\n  - D5/S1/Example", "strata_touched: D5/S1/Example",
             "strata_touched must be a list",
         )
 
-    def test_rejects_library_nul_in_body_without_replacing_projection(self) -> None:
-        self.check_library_rejected_without_replacement(
+    def test_reports_library_nul_in_body(self) -> None:
+        self.check_library_reported(
             "# Example paper", "# Example\x00paper", "forbidden YAML character U+0000",
         )
 
-    def test_cli_fails_without_publishing_invalid_input(self) -> None:
+    def test_cli_publishes_the_rest_and_warns_about_invalid_input(self) -> None:
         self.fixture(self.marker().replace("-v1 ", "-v99 "))
         completed = subprocess.run(
             [sys.executable, os.fspath(build_site.__file__), str(self.upstream), str(self.output)],
             capture_output=True, text=True,
         )
-        self.assertEqual(completed.returncode, 1)
-        self.assertIn("marker", completed.stderr)
-        self.assertFalse(self.output.exists())
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("::warning title=Open problems::Blueprint/D5/S1/Example.md:3: resolution marker "
+                      "has unknown schema version 99; the record is ignored", completed.stderr)
+        self.assertIn("**0 of 2 solved in this repository.**",
+                      (self.output / "open-problems.md").read_text(encoding="utf-8"))
 
     def test_verifier_rejects_tampered_or_missing_generated_page(self) -> None:
         self.fixture()
@@ -868,7 +877,7 @@ class OpenProblemTests(unittest.TestCase):
             self.library(),
         ):
             with self.subTest(note=note):
-                self.check_rejected("Library/Words/paper2026.md", note, "citation.*disagrees")
+                self.check_reported("Library/Words/paper2026.md", note, "citation.*disagrees")
 
     def test_rejects_invalid_citations_in_dossier_and_selected_note(self) -> None:
         self.fixture()
@@ -887,7 +896,7 @@ class OpenProblemTests(unittest.TestCase):
                 with self.subTest(metadata=metadata, path=path):
                     self.write("Problems/alpha.md", self.dossier())
                     self.write("Library/Words/paper2026.md", self.library())
-                    self.check_rejected(path, original.replace("doi: 10.48550/arXiv.2601.12345", metadata), diagnostic)
+                    self.check_reported(path, original.replace("doi: 10.48550/arXiv.2601.12345", metadata), diagnostic)
 
     def test_accepts_doi_and_url_together_and_lists_both_locators(self) -> None:
         self.fixture(self.marker())
@@ -922,7 +931,7 @@ class OpenProblemTests(unittest.TestCase):
         ):
             with self.subTest(note=note, metadata=metadata):
                 self.write("Library/Words/paper2026.md", note)
-                self.check_rejected(
+                self.check_reported(
                     "Problems/alpha.md",
                     self.dossier().replace("doi: 10.48550/arXiv.2601.12345", metadata),
                     "citation .* disagrees",
@@ -1224,7 +1233,7 @@ FORBIDDEN_YAML_CODEPOINTS = (
 
 def library_rejection_test(old: str, new: str, diagnostic: str):
     def test(self):
-        self.check_library_rejected_without_replacement(old, new, diagnostic)
+        self.check_library_reported(old, new, diagnostic)
     return test
 
 
@@ -1240,7 +1249,7 @@ for case_name, scalar in (
         ("field", "title: Example paper", f"title: {scalar}"),
         ("list", "  - D5/S1/Example", f"  - {scalar}"),
     ):
-        name = f"test_rejects_library_{case_name}_{context}_without_replacing_projection"
+        name = f"test_reports_library_{case_name}_{context}"
         setattr(OpenProblemTests, name, library_rejection_test(old, new, diagnostic))
 
 for key, value in (
@@ -1248,13 +1257,13 @@ for key, value in (
     ("license", "citation-only"), ("triage", "anchor"),
 ):
     for shape, replacement in (("empty", ""), ("list", "\n  - Example")):
-        name = f"test_rejects_library_{shape}_{key}_without_replacing_projection"
+        name = f"test_reports_library_{shape}_{key}"
         setattr(OpenProblemTests, name, library_rejection_test(
             f"{key}: {value}", f"{key}:{replacement}", f"{key} must be a nonempty scalar",
         ))
 
 for case_name, arguments in LIBRARY_STRUCTURE_REJECTIONS.items():
-    name = f"test_rejects_library_{case_name}_without_replacing_projection"
+    name = f"test_reports_library_{case_name}"
     setattr(OpenProblemTests, name, library_rejection_test(*arguments))
 
 

@@ -176,6 +176,27 @@ class RenderKatexTests(unittest.TestCase):
         self.assertIn("Blueprint/Bad.md: formula 2:", warnings[1])
         self.assertIn("floor", warnings[1])
 
+    def test_katex_internal_errors_on_one_formula_fall_back_and_warn(self) -> None:
+        # KaTeX 0.16.4 throws a plain Error ("Font metrics not found") for astral
+        # characters such as U+1D4D4; that one formula must not stop the site.
+        source = "2\U0001d4d4(1)=\\log 2"
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "render_katex.py")],
+            input=json.dumps([{}, {"items": [{"Chapter": {
+                "name": "Astral", "path": "Problems/astral.md",
+                "content": f"ok $x$ then ${source}$\n", "sub_items": [],
+            }}]}]),
+            capture_output=True, text=True, cwd=ROOT,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        content = json.loads(result.stdout)["items"][0]["Chapter"]["content"]
+        self.assertEqual(content.count('class="katex"'), 1)
+        self.assertEqual(content.count('class="katex-fallback"'), 1)
+        warnings = [line for line in result.stderr.splitlines() if line.startswith("::warning ")]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Problems/astral.md: formula 1:", warnings[0])
+        self.assertIn("Font metrics", warnings[0])
+
     def test_renderer_failures_other_than_parse_errors_still_fail_the_build(self) -> None:
         with unittest.mock.patch.object(render_katex.subprocess, "run") as run:
             run.return_value = subprocess.CompletedProcess([], 1, "", "katex-render: formula 0: RangeError: boom")
