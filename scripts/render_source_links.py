@@ -179,7 +179,8 @@ class AnchorRenderer(HTMLParser):
         return content
 
 
-def render_source_links(upstream: Path, source: Path, book: Path) -> dict[str, object]:
+def captured_sha(source: Path, book: Path) -> str:
+    """The snapshot SHA, once source and rendered provenance agree with the build inputs."""
     provenance = json.loads((source / "provenance.json").read_bytes())
     if not provenance_is_usable(provenance):
         raise SourceLinkError("invalid source provenance")
@@ -187,7 +188,11 @@ def render_source_links(upstream: Path, source: Path, book: Path) -> dict[str, o
         raise SourceLinkError("provenance generator_revision does not match the build inputs")
     if (book / "provenance.json").read_bytes() != (source / "provenance.json").read_bytes():
         raise SourceLinkError("rendered provenance does not match the source snapshot")
-    sha = provenance["upstream_sha"]
+    return provenance["upstream_sha"]
+
+
+def render_source_links(upstream: Path, source: Path, book: Path) -> dict[str, object]:
+    sha = captured_sha(source, book)
     paths = regular_source_paths(upstream, sha)
     rewritten, unlinked, changed_pages = 0, 0, []
     for page in sorted(book.rglob("*.html")):

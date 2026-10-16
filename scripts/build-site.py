@@ -48,10 +48,12 @@ except ModuleNotFoundError:
 
 TOOL_VERSION = "1.0.0"
 UPSTREAM_REPOSITORY = "https://github.com/the-omega-institute/trureturing"
+GENERATOR_REPOSITORY = "https://github.com/the-omega-institute/trureturing-mdbook"
 PROJECTION_MARKER = ".trureturing-mdbook-projection"
 PROJECTION_MARKER_CONTENT = b"trureturing-mdbook projection v1\n"
-# Thirty change-days keeps the generated page useful despite hundreds of daily commits.
-CHANGELOG_DAYS = 30
+# Only recent change-days: upstream lands hundreds of commits a day, and the full
+# upstream history is linked from the page.
+CHANGELOG_DAYS = 7
 SHA_RE = re.compile(rb"^[0-9a-f]{40,64}$")
 H1_RE = re.compile(r"^# (.*)\r?$", re.MULTILINE)
 INFORMATION_ESCAPE_TITLE = "What can these observations distinguish?"
@@ -277,10 +279,12 @@ def build_nav_page(
     label = display_path(posixpath.basename(directory)) if label is None else label
     current_nav = nav_path(directory)
     start = posixpath.dirname(current_nav)
+    tree_url = f"{UPSTREAM_REPOSITORY}/tree/{sha}/{quote_from_bytes(directory, safe='/')}"
     lines = [
         f"# {label}",
         "",
-        f"Navigation page for `{display_path(directory)}/` at upstream snapshot `{sha}`.",
+        f"Navigation page for [`{display_path(directory)}/`]({tree_url}) at upstream snapshot "
+        f"[`{sha}`]({UPSTREAM_REPOSITORY}/commit/{sha}).",
         "",
     ]
     children = direct_children(directory, directories, entries)
@@ -488,7 +492,13 @@ The source of mathematical truth is always the upstream repository, never this s
 The content shown here is pinned to upstream commit [`{sha}`]({commit_url}).
 {snapshot_freshness(built_at)}
 
-The generator, configuration and workflows in this repository are MIT licensed. For upstream
+Every page copied from upstream ends with its source on GitHub: the file at this snapshot,
+its history and blame, the latest version on `dev`, and the commit that last changed it.
+Lean declaration IDs written as code, such as `D5/S0/…/Name.result`, link to their module's
+source at this snapshot.
+
+The generator, configuration and workflows in
+[the-omega-institute/trureturing-mdbook]({GENERATOR_REPOSITORY}) are MIT licensed. For upstream
 content, consult the license and any content-specific notices in the
 [upstream source at this snapshot]({UPSTREAM_REPOSITORY}/tree/{sha}).
 This site grants no rights to that content and does not sublicense it. KaTeX and Pagefind

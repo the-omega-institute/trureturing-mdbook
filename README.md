@@ -19,10 +19,13 @@ regular `Blueprint/**/*.md`, `Problems/*.md` and `Library/**/*.md` blobs from th
 and derives the navigation (a folded menu without section numbers, where a directory
 whose only content is one subdirectory shares the entry of that subdirectory, so
 `Blueprint / D5` is one entry), the home page, an
-external open problems page, a first-parent changelog covering the last 30 dates with changes,
+external open problems page, a first-parent changelog covering the last 7 dates with changes,
 and a provenance record. It then
-builds with pinned mdBook, KaTeX under Node and Pagefind Extended, and deploys only after the source
+builds with pinned mdBook, KaTeX under Node and Pagefind Extended, links every page back to its
+upstream source on GitHub, and deploys only after the source
 set, page mapping, math output, relative links and artifact size all pass their gates.
+mdBook's single-page print view is disabled: it repeats every chapter in one file of about
+350 MB that no browser opens, and with it the artifact exceeded GitHub Pages' 1 GB limit.
 
 A defect in one upstream page does not keep the site from publishing. The affected unit is
 shown in a degraded form and the build log carries a GitHub warning naming the upstream
@@ -77,6 +80,7 @@ SITE_SRC="$(mktemp -d)"
 python3 scripts/build-site.py /path/to/trureturing "$SITE_SRC"
 MDBOOK_BOOK__SRC="$SITE_SRC" mdbook build --dest-dir book
 python3 scripts/render_source_links.py /path/to/trureturing "$SITE_SRC" book
+python3 scripts/render_page_sources.py /path/to/trureturing "$SITE_SRC" book
 python3 scripts/search_titles.py "$SITE_SRC" book
 pagefind_extended --site book --force-language zh
 python3 scripts/verify-site.py /path/to/trureturing "$SITE_SRC" book
@@ -104,15 +108,29 @@ Relative anchors are checked after rendering, as described next.
 
 After mdBook renders, `render_source_links.py` turns relative anchors to existing,
 unpublished upstream files (for example `.lean` source) into GitHub blob permalinks at
-the SHA in the source and book provenance. This includes mdBook's rebased links in
-`print.html`. Only exact paths to regular files in that Git tree qualify; missing paths
-are never inferred from alternate extensions. Published-page navigation and local resources
-stay relative. Query strings and fragments are retained. Only rendered anchor attributes
-change; copied upstream Markdown and all other HTML bytes stay intact. An anchor whose relative
-target is malformed, leaves the site or names no file in the book loses its `href`, with a
-warning naming the page (`print.html` repeats every chapter, so it is fixed silently). This step
-runs before Pagefind and the release gate, which still rejects any other missing relative
-resource.
+the SHA in the source and book provenance. Only exact paths to regular files in that Git
+tree qualify; missing paths are never inferred from alternate extensions. Published-page
+navigation and local resources stay relative. Query strings and fragments are retained. Only
+rendered anchor attributes change; copied upstream Markdown and all other HTML bytes stay
+intact. An anchor whose relative target is malformed, leaves the site or names no file in the
+book loses its `href`, with a warning naming the page. This step runs before Pagefind and the
+release gate, which still rejects any other missing relative resource.
+
+Then `render_page_sources.py` links each page back to GitHub. Every page projected from an
+upstream Markdown file ends with a source panel: the file and commit at the captured SHA, its
+history and blame at that SHA, the file on `dev`, its edit view, and the newest and oldest
+mainline commits that changed it. Like the changelog, these follow first parents: one
+`git log --first-parent --name-only --no-renames` pass over the published roots compares each
+commit, pull request merges included, with its first parent, so the newest entry is exactly
+where the snapshot's content of the file last changed on the mainline. The pass reads only
+trees, which the partial clone holds. The panel is excluded from the Pagefind index.
+Inline code that is exactly a Lean declaration ID (the resolution-record GID grammar, for
+example `D5/S0/Certificates/GreathouseLogTwoFloorRefutation.result`) links to its module's
+`.lean` file at the SHA when that exact regular file exists; code inside links, headings and
+`<pre>` stays as it is. Navigation pages link their directory's tree at the SHA, and the
+toolbar's GitHub button opens the upstream repository. Only the panel and the anchors around
+linked code are added; every inserted URL is absolute, so the release gate's relative-link
+checks are unchanged.
 
 Next, `search_titles.py` reads native rendered HTML head titles without changing the pages.
 It preserves the full title, including mdBook's book suffix, and omits absent or blank titles.
@@ -164,7 +182,6 @@ included in the existing navigation and changelog. Dossier, Library note and the
 links are repository-relative Markdown paths that mdBook rewrites to HTML. The DOI link
 uses `doi.org` and the URL is the recorded one for sources such as OEIS; the snapshot commit
 link remains at GitHub for provenance.
-The global GitHub toolbar shortcut is disabled so it adds no external navigation.
 
 All three input trees are read with `git ls-tree` and `git cat-file` at the same
 captured SHA, including during verification. The verifier independently regenerates
