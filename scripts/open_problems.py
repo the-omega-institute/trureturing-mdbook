@@ -15,7 +15,6 @@ import os
 import re
 import string
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -414,21 +413,42 @@ def parse_marker(
     return Resolution(kind, gid, path, number), slug
 
 
-def frozen_state_date(upstream: Path, sha: str, state_path: bytes) -> str:
-    history = git(
-        upstream, "log", "--diff-filter=A", "--format=%cs", "--reverse", "--no-renames",
-        sha, "--", ":(literal)" + os.fsdecode(state_path),
-    ).splitlines()
-    if not history:
-        raise OpenProblemError(f"no adding commit for {os.fsdecode(state_path)} at {sha}")
-    try:
-        frozen_date = history[0].decode("ascii")
-        if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", frozen_date):
-            raise ValueError("expected YYYY-MM-DD")
-        date.fromisoformat(frozen_date)
-    except (UnicodeError, ValueError) as exc:
-        raise OpenProblemError(f"invalid frozen-state commit date for {os.fsdecode(state_path)}") from exc
-    return frozen_date
+def frozen_state_dates(upstream: Path, sha: str, state_paths: list[bytes]) -> dict[bytes, str]:
+    """The date of the oldest commit that added each frozen state file, in one history pass.
+
+    One walk over the state directory replaces a walk per file (hundreds of them). Its
+    history simplification is that of the directory, not of each file, so on unusual
+    branch histories a date can differ from a per-file walk by a day or so.
+    """
+    if not state_paths:
+        return {}
+    raw = git(
+        upstream, "log", "--diff-filter=A", "--no-renames", "--name-only", "-z",
+        "--format=%x1e%cs", sha, "--", ":(literal)Golden/Frozen/state/",
+    )
+    wanted = set(state_paths)
+    added: dict[bytes, bytes] = {}
+    commit_date = b""
+    # Every listed path starts with "Golden/", so only a commit header starts with \x1e.
+    for token in raw.split(b"\0"):
+        if token.startswith(b"\x1e"):
+            commit_date = token[1:]
+        elif (path := token.removeprefix(b"\n")) in wanted:
+            added[path] = commit_date  # newest first: the last addition seen is the oldest
+    dates: dict[bytes, str] = {}
+    for state_path in state_paths:
+        if state_path not in added:
+            raise OpenProblemError(f"no adding commit for {os.fsdecode(state_path)} at {sha}")
+        try:
+            frozen_date = added[state_path].decode("ascii")
+            if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", frozen_date):
+                raise ValueError("expected YYYY-MM-DD")
+            date.fromisoformat(frozen_date)
+        except (UnicodeError, ValueError) as exc:
+            raise OpenProblemError(
+                f"invalid frozen-state commit date for {os.fsdecode(state_path)}") from exc
+        dates[state_path] = frozen_date
+    return dates
 
 
 def markdown_text(text: str) -> str:
@@ -527,10 +547,7 @@ def derive_open_problems(
             del resolutions[slug]
     state_paths = sorted({state for _, state in member_paths.values()})
     input_blobs(upstream, [entry_by_path[state] for state in state_paths])
-    # One history walk per state file; hundreds of them run in parallel Git processes.
-    with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
-        frozen_dates = dict(zip(state_paths, pool.map(
-            lambda path: frozen_state_date(upstream, sha, path), state_paths)))
+    frozen_dates = frozen_state_dates(upstream, sha, state_paths)
     lines = [
         "# External open problems", "",
         f"**{len(resolutions)} of {len(problems)} solved in this repository.**", "",
