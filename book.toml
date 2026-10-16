@@ -9,6 +9,14 @@ site-url = "/trureturing-mdbook/"
 # Thousands of pages: no "4.1.1.1." numbering, and the menu opens one level at a
 # time (the current page's ancestors are opened for it).
 no-section-label = true
+# The toolbar's GitHub button opens the upstream repository; each page also links
+# its own source file (scripts/render_page_sources.py).
+git-repository-url = "https://github.com/the-omega-institute/trureturing"
+
+# print.html repeats every chapter in one page (about 350 MB for the whole book):
+# no browser can open it, and it alone pushed the Pages artifact past GitHub's 1 GB limit.
+[output.html.print]
+enable = false
 
 [output.html.fold]
 enable = true

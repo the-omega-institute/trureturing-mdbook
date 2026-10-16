@@ -47,7 +47,7 @@ jobs:
     needs: probe
     if: needs.probe.outputs.build_required == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     outputs:
@@ -120,10 +120,16 @@ jobs:
         run: |
           set -euo pipefail
           git init .upstream
+          # Blobs outside the sparse checkout arrive one lazy fetch at a time; automatic
+          # gc would repack the whole history in the background after each batch of them.
+          git -C .upstream config gc.auto 0
+          git -C .upstream config maintenance.auto false
           git -C .upstream remote add origin https://github.com/the-omega-institute/trureturing.git
           git -C .upstream fetch --filter=blob:none --no-tags origin "$UPSTREAM_SHA"
           git -C .upstream sparse-checkout init --cone
-          git -C .upstream sparse-checkout set Blueprint Problems Library
+          # The open problems page reads frozen state files; checking them out fetches
+          # their blobs in one request instead of one lazy fetch each.
+          git -C .upstream sparse-checkout set Blueprint Problems Library Golden/Frozen/state
           git -C .upstream checkout --detach "$UPSTREAM_SHA"
           test "$(git -C .upstream rev-parse HEAD)" = "$UPSTREAM_SHA"
           test "$(git -C .upstream rev-parse --is-shallow-repository)" = false
@@ -138,6 +144,9 @@ jobs:
 
       - name: Render immutable upstream source links
         run: python3 scripts/render_source_links.py .upstream "$RUNNER_TEMP/trureturing-mdbook-site-src" book
+
+      - name: Link pages back to their upstream sources
+        run: python3 scripts/render_page_sources.py .upstream "$RUNNER_TEMP/trureturing-mdbook-site-src" book
 
       - name: Extract native search labels
         run: python3 scripts/search_titles.py "$RUNNER_TEMP/trureturing-mdbook-site-src" book

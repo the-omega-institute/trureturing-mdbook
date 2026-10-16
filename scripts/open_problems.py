@@ -15,6 +15,7 @@ import os
 import re
 import string
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -524,12 +525,12 @@ def derive_open_problems(
             resolutions[slug] = tuple(kept)
         else:
             del resolutions[slug]
-    input_blobs(upstream, [entry_by_path[state] for state in
-                           sorted({state for _, state in member_paths.values()})])
-    frozen_dates = {
-        path: frozen_state_date(upstream, sha, path)
-        for path in sorted({state for _, state in member_paths.values()})
-    }
+    state_paths = sorted({state for _, state in member_paths.values()})
+    input_blobs(upstream, [entry_by_path[state] for state in state_paths])
+    # One history walk per state file; hundreds of them run in parallel Git processes.
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+        frozen_dates = dict(zip(state_paths, pool.map(
+            lambda path: frozen_state_date(upstream, sha, path), state_paths)))
     lines = [
         "# External open problems", "",
         f"**{len(resolutions)} of {len(problems)} solved in this repository.**", "",

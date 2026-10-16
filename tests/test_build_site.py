@@ -211,7 +211,7 @@ class BuildSiteTests(unittest.TestCase):
         self.write("Blueprint/D5/S0/Deep/Page.md", "# Deep page\n")
         self.write("Blueprint/D5/S0/Top.md", "# Top page\n")
         self.write("Library/Words/note.md", "# Note\n")
-        self.commit("chains", "2026-07-03T09:00:00+00:00")
+        sha = self.commit("chains", "2026-07-03T09:00:00+00:00")
         build_site.build_site(self.upstream, self.output)
         summary = (self.output / "SUMMARY.md").read_text(encoding="utf-8")
         leaf = build_site.nav_path(b"Blueprint/D5/S0").decode()
@@ -226,7 +226,12 @@ class BuildSiteTests(unittest.TestCase):
         for skipped in (b"Blueprint", b"Blueprint/D5", b"Library"):
             self.assertFalse((self.output / os.fsdecode(build_site.nav_path(skipped))).exists(), skipped)
         page = (self.output / leaf).read_text(encoding="utf-8")
-        self.assertTrue(page.startswith("# Blueprint / D5 / S0\n\nNavigation page for `Blueprint/D5/S0/`"))
+        repository = build_site.UPSTREAM_REPOSITORY
+        self.assertTrue(page.startswith(
+            "# Blueprint / D5 / S0\n\nNavigation page for "
+            f"[`Blueprint/D5/S0/`]({repository}/tree/{sha}/Blueprint/D5/S0) at upstream snapshot "
+            f"[`{sha}`]({repository}/commit/{sha}).\n"
+        ))
         self.assertIn("- [Deep](" + build_site.nav_path(b"Blueprint/D5/S0/Deep").decode().removeprefix("_nav/") + ")", page)
         self.assertIn("- [Top page](../Blueprint/D5/S0/Top.md)", page)
         book = self.root / "book"
@@ -278,13 +283,18 @@ class BuildSiteTests(unittest.TestCase):
         ]
         for index, path in enumerate(paths):
             self.write(path, f"# Page {index}\n")
-        self.commit("unicode path fixture", "2026-07-03T09:00:00+00:00")
+        sha = self.commit("unicode path fixture", "2026-07-03T09:00:00+00:00")
 
         build_site.build_site(self.upstream, self.output)
         summary = (self.output / "SUMMARY.md").read_text(encoding="utf-8")
         self.assertIn(
             "Blueprint/目录%20with%20space/文件%20名.md",
             summary,
+        )
+        nav = (self.output / os.fsdecode(build_site.nav_path("Blueprint/目录 with space".encode())))
+        self.assertIn(
+            f"({build_site.UPSTREAM_REPOSITORY}/tree/{sha}/Blueprint/%E7%9B%AE%E5%BD%95%20with%20space)",
+            nav.read_text(encoding="utf-8"),
         )
         book = self.root / "book"
         book.mkdir()
