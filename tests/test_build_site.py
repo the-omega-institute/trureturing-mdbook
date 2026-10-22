@@ -826,10 +826,10 @@ class EscapePseudoLinksTests(unittest.TestCase):
         for expression in ("[X^(m-1)](1-A)^m", "[X^(m−1)](1−F)^m"):
             with self.subTest(expression=expression):
                 content = (
-                    "[real](1-A)^m and [X^n](notes.md)^2 and [X^n](../notes.md)^2\n"
+                    "[X^n](notes.md)^2 and [X^n](../notes.md)^2\n"
                     "[X^n](https://example.org)^2 and [X^n](#coefficient)^2\n"
                     "[X^n](1−F.md)^2 and [X^n](../1−F)^2 and [X^n](#1−F)^2\n"
-                    "[X^n](1-A) and [X^n](1−F) and [X^n](appendix)\n"
+                    "[X^n](<a b.md>) and [X^n](notes.md \"Title\") and [X^n](dir/)\n"
                     f"`{expression}` and ``{expression}``\n"
                     f"${expression}$ and $$\n{expression}\n$$\n"
                     f"\\({expression}\\) and \\[\n{expression}\n\\]\n"
@@ -837,6 +837,17 @@ class EscapePseudoLinksTests(unittest.TestCase):
                     f"\\{expression}\n"
                 )
                 self.assertEqual(escape_pseudo_links.escape_pseudo_links(content), content)
+
+    def test_destinations_that_cannot_name_a_target_are_prose(self) -> None:
+        # Upstream 3b4cd0c6 renders these as links to "ρ", "10/17" and "bracket".
+        for prose in ("[1 ⊗ RED_κ](ρ) ≥ 0", "[1 ⊗ RED_κ](ψ)", "is [17/(70Z)](10/17)(7/17)",
+                      "c_j = [x^{deg−j}](bracket)/F(m, 2k + 1)",
+                      "[real](1-A)^m", "[X^n](1-A)", "[X^n](appendix)", "[x]()", "[a](ρ \"t.x\")"):
+            with self.subTest(prose=prose):
+                content = f"Before {prose} after.\n"
+                transformed = escape_pseudo_links.escape_pseudo_links(content)
+                self.assertEqual(transformed, content.replace("[", "\\[", 1))
+                self.assertEqual(escape_pseudo_links.escape_pseudo_links(transformed), transformed)
 
     def test_mdbook_protocol_transforms_nested_chapters_in_memory(self) -> None:
         book = {

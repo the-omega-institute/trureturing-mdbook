@@ -193,6 +193,7 @@ class SourceLinksTests(unittest.TestCase):
         self.write(report, "# Current bounds\n\n## Motivation\n")
         self.write("docs/reports/pair.md", "markdown twin\n")
         self.write("docs/reports/pair.html", "html twin\n")
+        self.write("D5/Words/Powers/WordPower.lean", "-- module without a Blueprint page\n")
         self.write("Blueprint/Erdos7.md", f"# Erdős 7\n\n[bounds](../{report}#motivation)\n")
         sha = self.commit("dossier links an unpublished report", "2026-09-10T01:00:00Z")
         paths = links.regular_source_paths(self.upstream, sha)
@@ -204,6 +205,12 @@ class SourceLinksTests(unittest.TestCase):
              f"{links.UPSTREAM_REPOSITORY}/blob/{sha}/{report}?plain=1"),
             # A raw HTML anchor keeps its `.md` name and already resolved before this case.
             (f"../{report}", b"Blueprint/Erdos7.html", f"{links.UPSTREAM_REPOSITORY}/blob/{sha}/{report}"),
+            # Upstream 3b4cd0c6 links Blueprint pages that do not exist; their Lean modules do.
+            ("Powers/WordPower.html#def", b"Blueprint/D5/Words/ParryNormalPrefix.html",
+             f"{links.UPSTREAM_REPOSITORY}/blob/{sha}/D5/Words/Powers/WordPower.lean#def"),
+            ("D5/Words/Powers/WordPower.md", b"Blueprint/Erdos7.html",
+             f"{links.UPSTREAM_REPOSITORY}/blob/{sha}/D5/Words/Powers/WordPower.lean"),
+            ("Powers/Absent.html", b"Blueprint/D5/Words/ParryNormalPrefix.html", None),
             # An upstream `.html` blob of the same name still wins, as before.
             ("../docs/reports/pair.html", b"Blueprint/Erdos7.html",
              f"{links.UPSTREAM_REPOSITORY}/blob/{sha}/docs/reports/pair.html"),

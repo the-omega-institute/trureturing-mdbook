@@ -150,7 +150,7 @@ class RenderKatexTests(unittest.TestCase):
 
     def test_katex_parse_errors_fall_back_to_escaped_source_and_warn(self) -> None:
         import html, re
-        sources = ["\\notacommand{x}_*a*", "\\floor*{\\frac{n}{2}}+\\{1\\}`[b](c)`"]
+        sources = ["\\frac{x}{_*a*", "x^{1}^{2}+\\{1\\}`[b](c)`"]
         result = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "render_katex.py")],
             input=json.dumps([{}, {"items": [{"Chapter": {
@@ -172,9 +172,41 @@ class RenderKatexTests(unittest.TestCase):
         warnings = [line for line in result.stderr.splitlines() if line.startswith("::warning ")]
         self.assertEqual(len(warnings), 2)
         self.assertIn("Blueprint/Bad.md: formula 1:", warnings[0])
-        self.assertIn("notacommand", warnings[0])
+        self.assertIn("Unexpected end of input", warnings[0])
         self.assertIn("Blueprint/Bad.md: formula 2:", warnings[1])
-        self.assertIn("floor", warnings[1])
+        self.assertIn("Double superscript", warnings[1])
+
+    def run_chapter(self, content: str) -> tuple[str, str]:
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "render_katex.py")],
+            input=json.dumps([{}, {"items": [{"Chapter": {
+                "name": "Quote", "path": "Library/Quote.md", "content": content, "sub_items": [],
+            }}]}]),
+            capture_output=True, text=True, cwd=ROOT,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)["items"][0]["Chapter"]["content"], result.stderr
+
+    def test_package_macros_and_markdown_escaped_backslashes_render(self) -> None:
+        # Upstream 3b4cd0c6 quotes papers that use physics/dsfont/mathtools commands, and
+        # some notes escape TeX backslashes for Markdown (`\\mathcal`, `\\\\`).
+        formulas = ["\\Tr(\\rho) = \\tr \\rho", "\\ketbra{0}{1} + \\floor{x} + \\mathds{1}",
+                    "\\Tilde{x} + \\mbox{if } \\norm{v}", "\\\\mathcal{Q}^+_\\\\alpha",
+                    "\\begin{bmatrix} A &X \\\\\\\\ X^* &B \\end{bmatrix}"]
+        content, stderr = self.run_chapter("".join(f"${formula}$\n" for formula in formulas))
+        self.assertEqual(content.count('class="katex"'), len(formulas))
+        self.assertNotIn("katex-fallback", content)
+        self.assertNotIn("::warning", stderr)
+        self.assertNotIn("#cc0000", content)
+
+    def test_paper_local_macros_render_around_their_name_in_red(self) -> None:
+        content, stderr = self.run_chapter("$\\qc(x) + \\scrT_1$ and $y$\n")
+        self.assertEqual(content.count('class="katex"'), 2)
+        self.assertNotIn("katex-fallback", content)
+        self.assertIn("#cc0000", content)
+        self.assertIn("qc", content)
+        self.assertNotIn("::warning", stderr)
+        self.assertIn("render-katex: 1 formulas show an undefined macro's name in red", stderr)
 
     def test_katex_internal_errors_on_one_formula_fall_back_and_warn(self) -> None:
         # KaTeX 0.16.4 throws a plain Error ("Font metrics not found") for astral

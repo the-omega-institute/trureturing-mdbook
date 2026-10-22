@@ -27,13 +27,19 @@ set, page mapping, math output, relative links and artifact size all pass their 
 mdBook's single-page print view is disabled: it repeats every chapter in one file of about
 350 MB that no browser opens, and with it the artifact exceeded GitHub Pages' 1 GB limit.
 
-A defect in one upstream page does not keep the site from publishing. The affected unit is
-shown in a degraded form and the build log carries a GitHub warning naming the upstream
-file to fix: a formula KaTeX cannot render is shown as its TeX source; an anchor whose
-relative target is malformed, leaves the site or does not exist keeps its text but loses its
-link; unpaired `$$` delimiters stay as text; and a dossier, reading note or resolution record
-the problem page cannot interpret is left out of that page (the files themselves are still
-published). Failures that do not belong to one upstream file — Git reads, the projected source
+A defect in one upstream page does not keep the site from publishing. What can be repaired is:
+a formula using a common package macro, Markdown-escaped backslashes or a macro defined only
+in the quoted paper still renders (the last with that macro's name in red); prose such as
+`[1 ⊗ RED_κ](ρ)` stays text; a link to a Blueprint page missing from the snapshot points at
+its Lean module; a problem whose reading note is not written yet cites its dossier's DOI or
+URL; and a dossier locator that differs from its note's (another arXiv version or anchor) is
+no defect, as the entry cites the note. What cannot is shown in a degraded form, and the build
+log carries a GitHub warning naming the upstream file to fix: a formula KaTeX still cannot
+render is shown as its TeX source; an anchor whose relative target is malformed, leaves the
+site or does not exist keeps its text but loses its link; unpaired `$$` delimiters stay as
+text; and a dossier, reading note or resolution record the problem page cannot interpret is
+left out of that page (the files themselves are still published). Failures that do not belong
+to one upstream file — Git reads, the projected source
 set, page mappings, provenance, tool versions, missing non-anchor resources and the artifact
 size — still stop the build.
 
@@ -95,21 +101,31 @@ Formulas are rendered by `scripts/render_katex.py`, an mdBook preprocessor that 
 and renders them all in one Node process with the KaTeX package pinned in `package-lock.json`.
 It replaced mdbook-katex, whose embedded QuickJS runtime has a 256 KiB stack: a theorem page
 with a few hundred nested `\left…\right` groups made it keep the source text, which the
-release gate then refused. A formula KaTeX cannot render is shown as its source, with a
-warning naming the page.
+release gate then refused. Commands from LaTeX packages that upstream quotes use and KaTeX
+lacks (`\Tr`, `\tr`, `\mathds`, `\Tilde`, `\ketbra`, `\floor`, `\norm`, `\mbox`, …) are
+defined in `scripts/katex_render.js`. A formula that still fails is retried with
+Markdown-escaped backslashes undone (`\\mathcal` for `\mathcal`), and one whose only problem is
+a macro defined in the quoted paper (`\qc`, `\scrT`) is rendered in KaTeX's lenient mode, which
+shows that command's name in red; the log reports how many. A formula KaTeX still cannot
+render is shown as its source, with a warning naming the page.
 
 Before rendering, the prose preprocessor escapes link-shaped mathematical notation such as
 `mu_H[d](univ)` and standalone powered coefficient expressions such as
 `[X^(m-1)](1-A)^m` or `[X^(m−1)](1−F)^m`, with ASCII or Unicode minus signs.
 The latter requires a coefficient selector, an algebraic factor and an
-immediately following power; URL and file-path characters do not qualify. The transformation
+immediately following power; URL and file-path characters do not qualify. It also escapes
+any inline link whose destination cannot name a target: real links carry a scheme, an
+extension, an anchor or a trailing slash, while `[1 ⊗ RED_κ](ρ)`, `[17/(70Z)](10/17)` or
+`[x^{deg−j}](bracket)` have none. The transformation
 runs in memory, leaving copied upstream Markdown intact, and preserves code and math regions.
 Relative anchors are checked after rendering, as described next.
 
 After mdBook renders, `render_source_links.py` turns relative anchors to existing,
 unpublished upstream files (for example `.lean` source) into GitHub blob permalinks at
 the SHA in the source and book provenance. Only exact paths to regular files in that Git
-tree qualify; missing paths are never inferred from alternate extensions. Published-page
+tree qualify; missing paths are never inferred from alternate extensions, with one exception:
+a link to a Blueprint page missing from the snapshot (`Blueprint/D5/X.md`) points at its Lean
+module (`D5/X.lean`) when that exact file exists. Published-page
 navigation and local resources stay relative. Query strings and fragments are retained. Only
 rendered anchor attributes change; copied upstream Markdown and all other HTML bytes stay
 intact. An anchor whose relative target is malformed, leaves the site or names no file in the
@@ -198,10 +214,11 @@ including `: `, `#`, quotes and flow characters, is the whole text verbatim. Onl
 markers (`|`, `>` and their chomping forms), values that are not one canonical non-empty line
 after decoding, and forbidden characters fail. Unsupported YAML syntax, missing or unknown
 keys, duplicate keys, path/slug disagreement, and duplicate or out-of-order dossier
-slugs are rejected. Each bibkey must select exactly one regular Library note with
-the current closed Library key set (also allowing optional `url`). The note holds the source
-identity: every DOI or URL the dossier gives must equal the note's value of the same kind,
-byte for byte, while the note may hold a locator the dossier omits. The `doi` key is required
+slugs are rejected. Each bibkey selects at most one regular Library note with
+the current closed Library key set (also allowing optional `url`); a bibkey whose note is not
+written yet is listed with the dossier's own DOI or URL and no claim. The note holds the source
+identity: the entry cites the note, even where the dossier gives another version or anchor of
+the same source (`…/abs/0910.0693v2` against `…/abs/0910.0693`). The `doi` key is required
 but nullable (bare, `null` or `~`); each dossier and each note needs at least one of a non-null
 DOI and a URL, and may carry both. Non-null DOIs must match `^10\.[0-9]{4,9}/\S+$`; journal
 DOIs and arXiv DOIs are accepted. URLs must already be canonical absolute HTTPS URLs with a
@@ -251,19 +268,23 @@ path comes from each member GID: `D5/X/Y.theorem` maps to
 `Blueprint/D5/X/Y.md` and `Golden/Frozen/state/D5/X/Y.lean.json`. This follows the segment-preserving Lean,
 Scribe and Markdown address invariant in upstream's
 [repository specification, sections 2.3 and A2](https://github.com/the-omega-institute/trureturing/blob/5c1f71b3b34d4946698510e141193aa32d0b8a5d/docs/develop/spec/golden-ledger-repo-spec.md).
-Solved problems are ordered by their latest member freeze date. The lookup is:
+Solved problems are ordered by their latest member freeze date. All dates come from one
+pass over the state directory:
 
 ```sh
-git log --diff-filter=A --format=%cs --reverse --no-renames "$SHA" -- \
-  ':(literal)Golden/Frozen/state/D5/X/Y.lean.json'
+git log --diff-filter=A --diff-merges=first-parent --no-renames --name-only "$SHA" -- \
+  ':(literal)Golden/Frozen/state/'
 ```
 
-The first output line supplies the date, including if the file was later deleted
-and re-added. Git failures and malformed dates fail the build.
-The workflow's non-shallow `fetch --filter=blob:none` and sparse checkout retain this history
-even with only `Blueprint Problems Library` checked out; `Golden/` need not be
-materialized. The same publication predicate selects source blobs, changelog paths
-and the files whose bytes the verifier checks.
+The oldest addition of each file supplies its date, including if the file was later
+deleted and re-added; comparing merges with their first parent dates a file a merge added
+while resolving a conflict. Because history is simplified for the directory rather than per
+file, a date can differ from a per-file walk by about a day on unusual branch histories.
+A file without a readable date is shown without one; Git failures still fail the build.
+The workflow's non-shallow `fetch --filter=blob:none` retains this history, and its sparse
+checkout of `Blueprint Problems Library Golden/Frozen/state` fetches the blobs the page reads
+in one request. The same publication predicate selects source blobs, changelog paths and the
+files whose bytes the verifier checks.
 
 ## License boundary
 

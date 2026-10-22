@@ -79,10 +79,13 @@ def warning_line(where: str, formula_index: int, message: str) -> str:
     return workflow_warning("KaTeX fallback", f"{where}: formula {formula_index}: {message}")
 
 
-def render_formulas(formulas: list[tuple[str, bool]]) -> tuple[list[str | None], list[dict[str, Any]]]:
-    """Return KaTeX HTML per formula (``None`` where KaTeX could not render it) and the failures."""
+def render_formulas(
+    formulas: list[tuple[str, bool]],
+) -> tuple[list[str | None], list[dict[str, Any]], int]:
+    """Return KaTeX HTML per formula (``None`` where KaTeX could not render it), the
+    failures, and how many formulas render with an unknown macro's name shown in red."""
     if not formulas:
-        return [], []
+        return [], [], 0
     payload = json.dumps([{"tex": tex, "display": display} for tex, display in formulas])
     try:
         result = subprocess.run(
@@ -105,7 +108,10 @@ def render_formulas(formulas: list[tuple[str, bool]]) -> tuple[list[str | None],
             or any((item is None) != (index in failed) for index, item in enumerate(html))
             or not all(item is None or isinstance(item, str) for item in html)):
         raise RenderError("renderer returned inconsistent failures")
-    return html, failures
+    lenient = output.get("lenient", [])
+    if not isinstance(lenient, list) or not all(isinstance(index, int) for index in lenient):
+        raise RenderError("renderer returned an invalid lenient list")
+    return html, failures, len(lenient)
 
 
 def render_chapter(content: str, rendered: list[str]) -> str:
@@ -136,7 +142,7 @@ def preprocess_book(book: dict[str, Any]) -> dict[str, Any]:
             formulas.append((raw[start + width:end - width].decode("utf-8"), display))
             owners.append((chapter_index, formula_index))
     try:
-        rendered, failures = render_formulas(formulas)
+        rendered, failures, lenient = render_formulas(formulas)
     except RenderError as exc:
         message = str(exc)
         prefix = "katex-render: formula "
@@ -154,6 +160,10 @@ def preprocess_book(book: dict[str, Any]) -> dict[str, Any]:
         where = chapter.get("path") or chapter.get("name") or f"chapter {chapter_index}"
         print(warning_line(where, formula_index, str(failure.get("message", ""))), file=sys.stderr)
         rendered[index] = fallback_html(*formulas[index])
+    if lenient:
+        # A paper-local macro is not a defect of the page; the formula renders around it.
+        print(f"render-katex: {lenient} formulas show an undefined macro's name in red",
+              file=sys.stderr)
     position = 0
     for chapter, count in zip(found, counts, strict=True):
         chapter["content"] = render_chapter(chapter["content"], rendered[position:position + count])
