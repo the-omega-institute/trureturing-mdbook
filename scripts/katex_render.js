@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-// Render a JSON array of {tex, display} from stdin to a JSON array of HTML strings.
+// Render a JSON array of {tex, display} from stdin. The first output line is
+// {"version"}; then one JSON line per formula, in order: {"html"} with "lenient" when an
+// undefined macro is shown in red, or {"html": null, "failure"}. Streaming keeps the
+// book's ~400 MB of KaTeX HTML out of the V8 heap (one array of it ran out of memory).
 // KaTeX runs in Node's V8, whose stack is not the 256 KiB QuickJS budget that made
 // mdbook-katex give up on deeply nested formulas. A formula KaTeX cannot render even
 // with the package macros below, undone Markdown escaping, or (for a paper-local
@@ -49,6 +52,8 @@ function render(tex, display, lenient) {
     displayMode: display,
     throwOnError: !lenient,
     trust: false,
+    // LaTeX-compatibility notices change nothing in the output; thousands flood the log.
+    strict: "ignore",
     output: "html",
     macros: { ...MACROS },
   });
@@ -81,17 +86,15 @@ function renderItem(item) {
 }
 
 const items = JSON.parse(fs.readFileSync(0, "utf8"));
-const rendered = [];
-const failures = [];
-const lenient = [];
-for (const [index, item] of items.entries()) {
+// Writes to a pipe are synchronous on Linux, so nothing accumulates here.
+process.stdout.write(JSON.stringify({ version: katex.version }) + "\n");
+for (const item of items) {
+  let line;
   try {
-    const [html, unknownMacro] = renderItem(item);
-    rendered.push(html);
-    if (unknownMacro) lenient.push(index);
+    const [html, lenient] = renderItem(item);
+    line = lenient ? { html, lenient: true } : { html };
   } catch (error) {
-    rendered.push(null);
-    failures.push({ index, message: error && error.message ? error.message : String(error) });
+    line = { html: null, failure: error && error.message ? error.message : String(error) };
   }
+  process.stdout.write(JSON.stringify(line) + "\n");
 }
-process.stdout.write(JSON.stringify({ version: katex.version, html: rendered, failures, lenient }));

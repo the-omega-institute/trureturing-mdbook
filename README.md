@@ -99,6 +99,8 @@ complete history, including frozen-state additions.
 Formulas are rendered by `scripts/render_katex.py`, an mdBook preprocessor that finds every
 `$…$`, ``$`…`$`` and `$$…$$` span with the same scanner the verifier counts with (`scripts/math_scan.py`)
 and renders them all in one Node process with the KaTeX package pinned in `package-lock.json`.
+The process writes one JSON line per formula as it goes; holding the book's ~400 MB of KaTeX
+HTML in one array ran Node out of memory.
 It replaced mdbook-katex, whose embedded QuickJS runtime has a 256 KiB stack: a theorem page
 with a few hundred nested `\left…\right` groups made it keep the source text, which the
 release gate then refused. Commands from LaTeX packages that upstream quotes use and KaTeX

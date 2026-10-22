@@ -96,22 +96,31 @@ def render_formulas(
         raise RenderError(f"cannot start node: {exc}") from exc
     if result.returncode != 0:
         raise RenderError(result.stderr.strip() or f"node exited with {result.returncode}")
-    output = json.loads(result.stdout)
-    if output.get("version") != KATEX_VERSION:
-        raise RenderError(f"katex {output.get('version')!r} is installed; {KATEX_VERSION} is pinned")
-    html = output["html"]
-    failures = output.get("failures")
-    if len(html) != len(formulas) or not isinstance(failures, list):
+    # Split on "\n" only: JSON leaves U+2028 and other line separators unescaped.
+    try:
+        header, *lines = (json.loads(line) for line in result.stdout.split("\n")[:-1])
+    except ValueError as exc:  # JSONDecodeError, or no header line at all
+        raise RenderError(f"renderer returned malformed output: {exc}") from None
+    if not isinstance(header, dict):
+        raise RenderError("renderer returned malformed output: no version header")
+    if header.get("version") != KATEX_VERSION:
+        raise RenderError(f"katex {header.get('version')!r} is installed; {KATEX_VERSION} is pinned")
+    if len(lines) != len(formulas):
         raise RenderError("renderer returned a different number of formulas")
-    failed = {failure.get("index") for failure in failures if isinstance(failure, dict)}
-    if (len(failed) != len(failures)
-            or any((item is None) != (index in failed) for index, item in enumerate(html))
-            or not all(item is None or isinstance(item, str) for item in html)):
-        raise RenderError("renderer returned inconsistent failures")
-    lenient = output.get("lenient", [])
-    if not isinstance(lenient, list) or not all(isinstance(index, int) for index in lenient):
-        raise RenderError("renderer returned an invalid lenient list")
-    return html, failures, len(lenient)
+    html: list[str | None] = []
+    failures: list[dict[str, Any]] = []
+    lenient = 0
+    for index, line in enumerate(lines):
+        rendered = line.get("html") if isinstance(line, dict) else None
+        if isinstance(rendered, str) and "failure" not in line:
+            html.append(rendered)
+            lenient += line.get("lenient") is True
+        elif rendered is None and isinstance(line, dict) and "failure" in line:
+            html.append(None)
+            failures.append({"index": index, "message": str(line["failure"])})
+        else:
+            raise RenderError("renderer returned inconsistent failures")
+    return html, failures, lenient
 
 
 def render_chapter(content: str, rendered: list[str]) -> str:
