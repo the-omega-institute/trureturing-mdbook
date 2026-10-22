@@ -49,6 +49,10 @@ FORBIDDEN_YAML_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\
 BLOCK_SCALAR_MARKERS = {"|", "|-", "|+", ">", ">-", ">+"}
 
 
+class MissingNote(Exception):
+    """No reading note exists for a dossier's bibkey yet."""
+
+
 class OpenProblemError(RuntimeError):
     """An input cannot be interpreted without guessing."""
 
@@ -86,13 +90,20 @@ class Note:
 
     def citation(self) -> str:
         # Same shape as the upstream Scribe acknowledgement: authors (year). *title*. DOI. URL.
-        parts = [f"{markdown_text(self.authors)} ({markdown_text(self.year)}). *{markdown_text(self.title)}*."]
-        if self.doi is not None:
-            parts.append("DOI: [" + markdown_text(self.doi) + "](https://doi.org/"
-                         + quote_from_bytes(self.doi.encode(), safe="/") + ").")
-        if self.url is not None:
-            parts.append(f"URL: <{self.url}>.")
-        return " ".join(parts)
+        return " ".join([
+            f"{markdown_text(self.authors)} ({markdown_text(self.year)}). *{markdown_text(self.title)}*.",
+            *locators(self.doi, self.url),
+        ])
+
+
+def locators(doi: str | None, url: str | None) -> list[str]:
+    parts = []
+    if doi is not None:
+        parts.append("DOI: [" + markdown_text(doi) + "](https://doi.org/"
+                     + quote_from_bytes(doi.encode(), safe="/") + ").")
+    if url is not None:
+        parts.append(f"URL: <{url}>.")
+    return parts
 
 
 @dataclass(frozen=True)
@@ -418,13 +429,15 @@ def frozen_state_dates(upstream: Path, sha: str, state_paths: list[bytes]) -> di
 
     One walk over the state directory replaces a walk per file (hundreds of them). Its
     history simplification is that of the directory, not of each file, so on unusual
-    branch histories a date can differ from a per-file walk by a day or so.
+    branch histories a date can differ from a per-file walk by a day or so. Merges are
+    compared with their first parent, so a file a merge added while resolving a conflict
+    is dated too. A file without a readable date is left out; its entry shows no date.
     """
     if not state_paths:
         return {}
     raw = git(
         upstream, "log", "--diff-filter=A", "--no-renames", "--name-only", "-z",
-        "--format=%x1e%cs", sha, "--", ":(literal)Golden/Frozen/state/",
+        "--diff-merges=first-parent", "--format=%x1e%cs", sha, "--", ":(literal)Golden/Frozen/state/",
     )
     wanted = set(state_paths)
     added: dict[bytes, bytes] = {}
@@ -437,18 +450,18 @@ def frozen_state_dates(upstream: Path, sha: str, state_paths: list[bytes]) -> di
             added[path] = commit_date  # newest first: the last addition seen is the oldest
     dates: dict[bytes, str] = {}
     for state_path in state_paths:
-        if state_path not in added:
-            raise OpenProblemError(f"no adding commit for {os.fsdecode(state_path)} at {sha}")
         try:
             frozen_date = added[state_path].decode("ascii")
-            if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", frozen_date):
-                raise ValueError("expected YYYY-MM-DD")
             date.fromisoformat(frozen_date)
-        except (UnicodeError, ValueError) as exc:
-            raise OpenProblemError(
-                f"invalid frozen-state commit date for {os.fsdecode(state_path)}") from exc
-        dates[state_path] = frozen_date
+        except (KeyError, UnicodeError, ValueError):
+            continue
+        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", frozen_date):
+            dates[state_path] = frozen_date
     return dates
+
+
+def frozen_on(frozen_date: str | None) -> str:
+    return f" {frozen_date}" if frozen_date is not None else ""
 
 
 def markdown_text(text: str) -> str:
@@ -460,9 +473,10 @@ def load_note(upstream: Path, entries: list[SourceEntry], bibkey: str) -> Note:
                   if entry.path.startswith(b"Library/")
                   and entry.path.count(b"/") == 2
                   and entry.path.endswith(b"/" + bibkey.encode() + b".md")]
+    if not candidates:
+        raise MissingNote(bibkey)
     if len(candidates) != 1:
-        reason = "missing" if not candidates else "ambiguous"
-        raise OpenProblemError(f"{reason} Library bibkey {bibkey}")
+        raise OpenProblemError(f"ambiguous Library bibkey {bibkey}")
     if candidates[0].mode not in PUBLISHED_MODES:
         raise OpenProblemError(f"Library bibkey {bibkey} must be a regular Git blob")
     path, blob = input_blobs(upstream, candidates)[0]
@@ -495,30 +509,20 @@ def derive_open_problems(
     # Git orders filenames, where alpha-beta.md precedes alpha.md; order by slug.
     dossier_entries.sort(key=lambda entry: entry.path[:-3])
     problems = parse_dossiers(input_blobs(upstream, dossier_entries), report)
-    notes: dict[str, Note] = {}
+    notes: dict[str, Note | None] = {}
     for bibkey in sorted({problem.bibkey for problem in problems}):
         try:
             notes[bibkey] = load_note(upstream, entries, bibkey)
+        except MissingNote:
+            # The note is not written yet: the entry cites the dossier's own DOI or URL.
+            notes[bibkey] = None
         except OpenProblemError as exc:
             users = ", ".join(os.fsdecode(problem.path) for problem in problems
                               if problem.bibkey == bibkey)
             skip_or_raise(report, exc, f"left off the list: {users}")
-    listed = []
-    for problem in problems:
-        note = notes.get(problem.bibkey)
-        if note is None:
-            continue
-        # The note holds the source identity; every locator a dossier gives must equal the
-        # note's locator of the same kind, while a note may hold locators the dossier omits.
-        if any(given is not None and given != held
-               for given, held in ((problem.doi, note.doi), (problem.url, note.url))):
-            skip_or_raise(report, OpenProblemError(
-                f"{os.fsdecode(note.path)}: citation {(note.doi, note.url)!r} disagrees with "
-                f"{os.fsdecode(problem.path)}: citation {(problem.doi, problem.url)!r}"
-            ), "the problem is left off the list")
-            continue
-        listed.append(problem)
-    problems = listed
+    # The note holds the source identity. A dossier may cite another version or anchor
+    # of the same source (`…v2`, `#S3`); the entry cites the note.
+    problems = [problem for problem in problems if problem.bibkey in notes]
     blueprint = [entry for entry in entries
                  if entry.path.startswith(b"Blueprint/") and is_published_path(entry.path)
                  and entry.mode in PUBLISHED_MODES]
@@ -559,7 +563,7 @@ def derive_open_problems(
     # Solved: newest freeze first; the stable sort keeps slug order within a day.
     solved_problems = sorted(
         (problem for problem in problems if problem.slug in resolutions),
-        key=lambda problem: max(frozen_dates[member_paths[member.declaration_gid][1]]
+        key=lambda problem: max(frozen_dates.get(member_paths[member.declaration_gid][1], "")
                                 for member in resolutions[problem.slug]), reverse=True,
     )
     for heading, listed, count in (
@@ -571,7 +575,6 @@ def derive_open_problems(
         for problem in listed:
             note = notes[problem.bibkey]
             dossier_url = quote_from_bytes(problem.path, safe="/")
-            note_url = quote_from_bytes(note.path, safe="/")
             lines.extend([f"### {markdown_text(problem.title)}", ""])
             members = resolutions.get(problem.slug)
             if members is not None:
@@ -582,19 +585,24 @@ def derive_open_problems(
                     declaration = member.declaration_gid.split(".", 1)[1]
                     prefix = f"**{label}.** " if index == 0 else ""
                     lines.append(f"{prefix}Lean theorem [`{declaration}`]({target}), "
-                                 f"frozen in this repository {frozen_dates[state_path]}.")
+                                 f"frozen in this repository{frozen_on(frozen_dates.get(state_path))}.")
                 lines.append("")
-            lines.extend([
-                note.citation(), "",
-                f"**Claim.** {markdown_text(note.claim)}", "",
-                f"[Problem details]({dossier_url}) \u00b7 [Reading note]({note_url})", "",
-            ])
+            if note is None:
+                lines.extend([" ".join(locators(problem.doi, problem.url)), "",
+                              f"[Problem details]({dossier_url})", ""])
+            else:
+                note_url = quote_from_bytes(note.path, safe="/")
+                lines.extend([
+                    note.citation(), "",
+                    f"**Claim.** {markdown_text(note.claim)}", "",
+                    f"[Problem details]({dossier_url}) \u00b7 [Reading note]({note_url})", "",
+                ])
     lines.extend([
         "## How this list is made", "",
         f"Source revision: [`{sha[:8]}`]({UPSTREAM_REPOSITORY}/commit/{sha}).", "",
         *([snapshot_freshness(built_at), ""] if built_at is not None else []),
         "The list is generated from problem files, reading notes, and resolution records in theorem pages at this source revision.",
-        "The citation and claim of each entry are copied from the reading note's front matter (authors, year, title, DOI or URL, claim). The claim is the note's transcription of the source statement; whether it quotes the source exactly is not checked here.",
+        "The citation and claim of each entry are copied from the reading note's front matter (authors, year, title, DOI or URL, claim). The claim is the note's transcription of the source statement; whether it quotes the source exactly is not checked here. An entry whose reading note is not written yet cites the problem file's DOI or URL.",
         "The records are read as text, so ordinary prose can produce one; this page does not check that a record came from the repository's own verified claim.",
         "This page does not run the repository's checks or verify the named theorems or their Lean proofs.", "",
         'The "frozen in this repository" date is the date of the first commit that added each named theorem\'s module to the frozen record. It is not the date the problem was solved in the world or the resolution was recorded.',

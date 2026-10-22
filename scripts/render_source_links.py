@@ -92,10 +92,18 @@ def source_permalink(
     if target not in paths:
         # mdBook renders every relative `x.md` link as `x.html`, so an unpublished
         # upstream Markdown file arrives under an `.html` name that exists nowhere.
-        # Only that exact upstream `.md` blob is a target; nothing else is guessed.
-        if markdown_page == target or markdown_page not in paths:
+        # That exact upstream `.md` blob is a target. A Blueprint page missing from the
+        # snapshot points at its Lean module instead (`Blueprint/D5/X.md` documents
+        # `D5/X.lean`) when that exact file exists. Nothing else is guessed.
+        formal = (markdown_page[len(b"Blueprint/"):-3] + b".lean"
+                  if markdown_page.startswith(b"Blueprint/") and markdown_page.endswith(b".md")
+                  else None)
+        if markdown_page != target and markdown_page in paths:
+            target = markdown_page
+        elif formal in paths:
+            target = formal
+        else:
             return None
-        target = markdown_page
     suffix = value[len(parsed.path):]
     return f"{UPSTREAM_REPOSITORY}/blob/{sha}/{quote_from_bytes(target, safe='/')}{suffix}"
 

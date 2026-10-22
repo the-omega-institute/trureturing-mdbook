@@ -79,10 +79,13 @@ def warning_line(where: str, formula_index: int, message: str) -> str:
     return workflow_warning("KaTeX fallback", f"{where}: formula {formula_index}: {message}")
 
 
-def render_formulas(formulas: list[tuple[str, bool]]) -> tuple[list[str | None], list[dict[str, Any]]]:
-    """Return KaTeX HTML per formula (``None`` where KaTeX could not render it) and the failures."""
+def render_formulas(
+    formulas: list[tuple[str, bool]],
+) -> tuple[list[str | None], list[dict[str, Any]], int]:
+    """Return KaTeX HTML per formula (``None`` where KaTeX could not render it), the
+    failures, and how many formulas render with an unknown macro's name shown in red."""
     if not formulas:
-        return [], []
+        return [], [], 0
     payload = json.dumps([{"tex": tex, "display": display} for tex, display in formulas])
     try:
         result = subprocess.run(
@@ -93,19 +96,31 @@ def render_formulas(formulas: list[tuple[str, bool]]) -> tuple[list[str | None],
         raise RenderError(f"cannot start node: {exc}") from exc
     if result.returncode != 0:
         raise RenderError(result.stderr.strip() or f"node exited with {result.returncode}")
-    output = json.loads(result.stdout)
-    if output.get("version") != KATEX_VERSION:
-        raise RenderError(f"katex {output.get('version')!r} is installed; {KATEX_VERSION} is pinned")
-    html = output["html"]
-    failures = output.get("failures")
-    if len(html) != len(formulas) or not isinstance(failures, list):
+    # Split on "\n" only: JSON leaves U+2028 and other line separators unescaped.
+    try:
+        header, *lines = (json.loads(line) for line in result.stdout.split("\n")[:-1])
+    except ValueError as exc:  # JSONDecodeError, or no header line at all
+        raise RenderError(f"renderer returned malformed output: {exc}") from None
+    if not isinstance(header, dict):
+        raise RenderError("renderer returned malformed output: no version header")
+    if header.get("version") != KATEX_VERSION:
+        raise RenderError(f"katex {header.get('version')!r} is installed; {KATEX_VERSION} is pinned")
+    if len(lines) != len(formulas):
         raise RenderError("renderer returned a different number of formulas")
-    failed = {failure.get("index") for failure in failures if isinstance(failure, dict)}
-    if (len(failed) != len(failures)
-            or any((item is None) != (index in failed) for index, item in enumerate(html))
-            or not all(item is None or isinstance(item, str) for item in html)):
-        raise RenderError("renderer returned inconsistent failures")
-    return html, failures
+    html: list[str | None] = []
+    failures: list[dict[str, Any]] = []
+    lenient = 0
+    for index, line in enumerate(lines):
+        rendered = line.get("html") if isinstance(line, dict) else None
+        if isinstance(rendered, str) and "failure" not in line:
+            html.append(rendered)
+            lenient += line.get("lenient") is True
+        elif rendered is None and isinstance(line, dict) and "failure" in line:
+            html.append(None)
+            failures.append({"index": index, "message": str(line["failure"])})
+        else:
+            raise RenderError("renderer returned inconsistent failures")
+    return html, failures, lenient
 
 
 def render_chapter(content: str, rendered: list[str]) -> str:
@@ -136,7 +151,7 @@ def preprocess_book(book: dict[str, Any]) -> dict[str, Any]:
             formulas.append((raw[start + width:end - width].decode("utf-8"), display))
             owners.append((chapter_index, formula_index))
     try:
-        rendered, failures = render_formulas(formulas)
+        rendered, failures, lenient = render_formulas(formulas)
     except RenderError as exc:
         message = str(exc)
         prefix = "katex-render: formula "
@@ -154,6 +169,10 @@ def preprocess_book(book: dict[str, Any]) -> dict[str, Any]:
         where = chapter.get("path") or chapter.get("name") or f"chapter {chapter_index}"
         print(warning_line(where, formula_index, str(failure.get("message", ""))), file=sys.stderr)
         rendered[index] = fallback_html(*formulas[index])
+    if lenient:
+        # A paper-local macro is not a defect of the page; the formula renders around it.
+        print(f"render-katex: {lenient} formulas show an undefined macro's name in red",
+              file=sys.stderr)
     position = 0
     for chapter, count in zip(found, counts, strict=True):
         chapter["content"] = render_chapter(chapter["content"], rendered[position:position + count])

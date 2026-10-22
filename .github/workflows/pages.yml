@@ -26,7 +26,7 @@ jobs:
       build_required: ${{ steps.freshness.outputs.build_required }}
     steps:
       - name: Check out site generator
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -57,7 +57,7 @@ jobs:
       GENERATOR_REVISION: ${{ needs.probe.outputs.generator_revision }}
     steps:
       - name: Check out site generator
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -73,7 +73,7 @@ jobs:
         run: python3 -m unittest discover -s tests -v
 
       - name: Restore pinned site tools
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.tool_cache }}/trureturing-mdbook-tools
           key: site-tools-${{ runner.os }}-${{ runner.arch }}-mdbook-0.5.4-pagefind-1.5.2
@@ -159,7 +159,7 @@ jobs:
 
       - name: Upload Pages artifact
         id: artifact
-        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: book
 
@@ -177,4 +177,4 @@ jobs:
     steps:
       - name: Deploy Pages
         id: deployment
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

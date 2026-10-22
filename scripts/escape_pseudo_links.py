@@ -28,7 +28,8 @@ def _is_escaped(text: str, index: int) -> bool:
     return backslashes % 2 == 1
 
 
-def _inline_link_end(text: str, start: int) -> int | None:
+def _inline_link_span(text: str, start: int) -> tuple[int, int] | None:
+    """The destination start and the end of an inline link opening at ``start``."""
     bracket_depth = 1
     cursor = start + 1
     while cursor < len(text):
@@ -48,6 +49,7 @@ def _inline_link_end(text: str, start: int) -> int | None:
 
     parenthesis_depth = 1
     cursor += 2
+    destination = cursor
     while cursor < len(text):
         character = text[cursor]
         if character in "\r\n":
@@ -58,12 +60,28 @@ def _inline_link_end(text: str, start: int) -> int | None:
             elif character == ")":
                 parenthesis_depth -= 1
                 if parenthesis_depth == 0:
-                    return cursor + 1
+                    return destination, cursor + 1
         cursor += 1
     return None
 
 
+def _plausible_destination(destination: str) -> bool:
+    """Whether a link destination could name a URL, file, directory or anchor.
+
+    Real links carry a scheme, an extension, an anchor or a trailing slash. Notation
+    such as `[1 ⊗ RED_κ](ρ)` or `of [a, b](10/17)` has none of them and is prose.
+    """
+    destination = destination.strip()
+    if destination.startswith("<"):
+        target = destination[1:].split(">", 1)[0]
+    else:
+        target = destination.split(maxsplit=1)[0] if destination else ""
+    return any(mark in target for mark in ".#:") or target.endswith("/")
+
+
 def escape_pseudo_links(content: str) -> str:
+    if "](" not in content:
+        return content  # nothing can parse as an inline link
     output: list[str] = []
     fence: tuple[str, int] | None = None
     code_span: int | None = None
@@ -136,13 +154,14 @@ def escape_pseudo_links(content: str) -> str:
             if (
                 line[cursor] == "["
                 and not _is_escaped(line, cursor)
-                and (link_end := _inline_link_end(line, cursor)) is not None
+                and (span := _inline_link_span(line, cursor)) is not None
                 and (
                     (cursor > 0 and not line[cursor - 1].isspace()
                      and line[cursor - 1] != "]")
+                    or not _plausible_destination(line[span[0]:span[1] - 1])
                     or (
-                        COEFFICIENT_FACTOR_RE.fullmatch(line[cursor:link_end]) is not None
-                        and line[link_end : link_end + 1] == "^"
+                        COEFFICIENT_FACTOR_RE.fullmatch(line[cursor:span[1]]) is not None
+                        and line[span[1] : span[1] + 1] == "^"
                     )
                 )
             ):

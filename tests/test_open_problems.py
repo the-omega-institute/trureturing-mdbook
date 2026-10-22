@@ -94,6 +94,16 @@ class OpenProblemTests(unittest.TestCase):
         self.assertTrue((self.output / "open-problems.md").is_file())
         return warnings
 
+    def check_cites_note(self, path: str, value: str, citation: str) -> None:
+        """A dossier locator that differs from its note's is no defect: the entry cites the note."""
+        self.write(path, value)
+        self.commit("dossier cites another locator", "2026-07-07T09:00:00+00:00")
+        self.assertEqual(self.build_with_warnings(), [])
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        entry = page.split("### Problem alpha\n", 1)[1].split("\n##", 1)[0]
+        self.assertIn(citation, entry)
+        self.assertIn("[Reading note](Library/Words/paper2026.md)", entry)
+
     def check_fatal(self, path: str, value: str, diagnostic: str) -> None:
         self.write(path, value)
         self.commit("invalid open problem input", "2026-07-07T09:00:00+00:00")
@@ -612,14 +622,11 @@ class OpenProblemTests(unittest.TestCase):
     def test_rejects_dossier_doi_inner_space(self) -> None:
         self.check_dossier_doi_rejected("10.48550/arXiv.2305 08349")
 
-    def test_rejects_doi_case_mismatch(self) -> None:
+    def test_doi_case_difference_cites_the_note(self) -> None:
         self.fixture()
-        self.check_reported(
+        self.check_cites_note(
             "Problems/alpha.md", self.dossier(doi="10.48550/arxiv.2601.12345"),
-            re.escape(
-                "Library/Words/paper2026.md: citation ('10.48550/arXiv.2601.12345', None) disagrees with "
-                "Problems/alpha.md: citation ('10.48550/arxiv.2601.12345', None)"
-            ),
+            "DOI: [10\\.48550\\/arXiv\\.2601\\.12345](https://doi.org/10.48550/arXiv.2601.12345).",
         )
 
     def test_reports_non_utf8_dossier(self) -> None:
@@ -650,7 +657,6 @@ class OpenProblemTests(unittest.TestCase):
         for note in (
             self.library().replace("doi: 10.48550/arXiv.2601.12345\n", ""),
             self.library().replace("10.48550/arXiv.2601.12345", "not-a-doi"),
-            self.library().replace("2601.12345", "2601.99999"),
             self.library().replace("bibkey: paper2026", "bibkey: wrong2026"),
         ):
             with self.subTest(note=note):
@@ -660,10 +666,16 @@ class OpenProblemTests(unittest.TestCase):
         (self.upstream / "Library/Words/paper2026.md").unlink()
         (self.upstream / "Library/Other/paper2026.md").unlink()
         self.commit("missing library note", "2026-07-08T09:00:00+00:00")
-        warnings = self.build_with_warnings()
-        self.assertEqual(len(warnings), 1)
-        self.assertRegex(warnings[0], "missing Library bibkey paper2026; left off the list: "
-                                      "Problems/alpha.md, Problems/beta.md")
+        # A note not written yet is no defect: each entry cites its dossier's locator.
+        self.assertEqual(self.build_with_warnings(), [])
+        page = (self.output / "open-problems.md").read_text(encoding="utf-8")
+        self.assertIn("**0 of 2 solved in this repository.**", page)
+        for slug in ("alpha", "beta"):
+            entry = page.split(f"### Problem {slug}\n", 1)[1].split("\n##", 1)[0]
+            self.assertEqual(entry.strip(), (
+                "DOI: [10\\.48550\\/arXiv\\.2601\\.12345](https://doi.org/10.48550/arXiv.2601.12345).\n\n"
+                f"[Problem details](Problems/{slug}.md)"
+            ))
 
     def check_library_reported(
         self, old: str, new: str, diagnostic: str = "unsupported front matter scalar",
@@ -867,17 +879,19 @@ class OpenProblemTests(unittest.TestCase):
         verified = verify_site.verify(self.upstream, self.output, self.mock_book())
         self.assertEqual((verified["open_problem_dossiers"], verified["open_problem_markers"]), (3, 2))
 
-    def test_rejects_mismatched_url_or_citation_kind(self) -> None:
+    def test_mismatched_url_or_citation_kind_cites_the_note(self) -> None:
         self.fixture()
         self.write("Problems/alpha.md", self.dossier(doi="null").replace("triage:", "url: https://oeis.org/A122399\ntriage:"))
         self.write("Problems/beta.md", self.dossier("beta", doi="null").replace("triage:", "url: https://oeis.org/A122399\ntriage:"))
-        for note in (
-            self.library(doi="null").replace("claim:", "url: https://oeis.org/A122398\nclaim:"),
-            self.library(doi="null").replace("claim:", "url: https://oeis.org/a122399\nclaim:"),
-            self.library(),
+        for note, citation in (
+            (self.library(doi="null").replace("claim:", "url: https://oeis.org/A122398\nclaim:"),
+             "URL: <https://oeis.org/A122398>."),
+            (self.library(doi="null").replace("claim:", "url: https://oeis.org/a122399\nclaim:"),
+             "URL: <https://oeis.org/a122399>."),
+            (self.library(), "(https://doi.org/10.48550/arXiv.2601.12345)."),
         ):
             with self.subTest(note=note):
-                self.check_reported("Library/Words/paper2026.md", note, "citation.*disagrees")
+                self.check_cites_note("Library/Words/paper2026.md", note, citation)
 
     def test_rejects_invalid_citations_in_dossier_and_selected_note(self) -> None:
         self.fixture()
@@ -920,7 +934,9 @@ class OpenProblemTests(unittest.TestCase):
         verified = verify_site.verify(self.upstream, self.output, self.mock_book())
         self.assertEqual((verified["open_problem_dossiers"], verified["open_problem_markers"]), (2, 1))
 
-    def test_rejects_dossier_locator_the_note_lacks_or_contradicts(self) -> None:
+    def test_dossier_locator_the_note_lacks_or_contradicts_cites_the_note(self) -> None:
+        # Upstream 3b4cd0c6: dossiers cite `…/abs/0910.0693v2` or `…/2605.22307v1#S3.p17.1`
+        # where the note holds `…/abs/0910.0693` or `…/2605.22307v1`.
         self.fixture()
         both = self.library().replace("claim:", "url: https://arxiv.org/abs/2601.12345v2\nclaim:")
         for note, metadata in (
@@ -931,10 +947,10 @@ class OpenProblemTests(unittest.TestCase):
         ):
             with self.subTest(note=note, metadata=metadata):
                 self.write("Library/Words/paper2026.md", note)
-                self.check_reported(
+                self.check_cites_note(
                     "Problems/alpha.md",
                     self.dossier().replace("doi: 10.48550/arXiv.2601.12345", metadata),
-                    "citation .* disagrees",
+                    "(https://doi.org/10.48550/arXiv.2601.12345).",
                 )
 
     def test_entry_cites_the_reading_note_verbatim_with_markdown_escaped(self) -> None:
