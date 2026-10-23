@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Escape prose notation that CommonMark would otherwise parse as a link."""
+"""Escape prose notation that CommonMark would otherwise parse as a link.
+
+Also folds a leading YAML front matter block, which CommonMark would show as a run of
+prose between two rules, into a collapsed code block.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +11,11 @@ import json
 import re
 import sys
 from typing import Any
+
+try:
+    from math_scan import front_matter_end
+except ModuleNotFoundError:
+    from scripts.math_scan import front_matter_end
 
 
 FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
@@ -175,6 +184,21 @@ def escape_pseudo_links(content: str) -> str:
     return "".join(output)
 
 
+def fold_front_matter(content: str) -> str:
+    """Show leading front matter as a collapsed YAML code block, verbatim and inert."""
+    raw = content.encode("utf-8")
+    end = front_matter_end(raw)
+    if not end:
+        return content
+    lines = raw[:end].decode("utf-8").splitlines()[1:-1]
+    longest = max((len(run) for run in re.findall(r"`+", "\n".join(lines))), default=0)
+    fence = "`" * max(3, longest + 1)
+    return "\n".join([
+        '<details class="front-matter">', "<summary>Metadata</summary>", "",
+        fence + "yaml", *lines, fence, "", "</details>", "",
+    ]) + "\n" + raw[end:].decode("utf-8")
+
+
 def preprocess_book(book: dict[str, Any]) -> dict[str, Any]:
     def visit(items: object) -> None:
         if not isinstance(items, list):
@@ -187,7 +211,7 @@ def preprocess_book(book: dict[str, Any]) -> dict[str, Any]:
                 continue
             content = chapter.get("content")
             if isinstance(content, str):
-                chapter["content"] = escape_pseudo_links(content)
+                chapter["content"] = escape_pseudo_links(fold_front_matter(content))
             visit(chapter.get("sub_items"))
 
     visit(book.get("items"))

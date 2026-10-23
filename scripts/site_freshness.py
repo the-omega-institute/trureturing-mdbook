@@ -7,6 +7,7 @@ import argparse
 import hashlib
 from http.client import HTTPException
 import json
+import os
 import re
 import subprocess
 import sys
@@ -25,10 +26,12 @@ GENERATOR_INPUTS = (
     "scripts/build-site.py", "scripts/build_warnings.py", "scripts/escape_pseudo_links.py",
     "scripts/katex_render.js", "scripts/math_scan.py", "scripts/open_problems.py",
     "scripts/render_katex.py",
-    "scripts/render_source_links.py", "scripts/render_page_sources.py",
+    "scripts/render_source_links.py", "scripts/render_page_sources.py", "scripts/compact_pages.py",
     "scripts/source_tree.py", "scripts/verify-site.py",
     "scripts/site_freshness.py", "scripts/search_titles.py", "scripts/search_titles.js",
 )
+WORKFLOW_FILE = "pages.yml"
+UNFINISHED_STATUSES = ("in_progress", "queued", "requested", "waiting", "pending")
 FRESHNESS_POLICY = (
     "Upstream changes are checked on a nominal 15-minute schedule. "
     "GitHub may delay or skip scheduled runs, and builds and deployment take additional time. "
@@ -113,16 +116,49 @@ def probe(upstream: str, ref: str, provenance_url: str, *, force: bool = False) 
     }
 
 
+def other_unfinished_runs(api_url: str, repository: str, run_id: int, token: str) -> list[int] | None:
+    """Ids of this workflow's other unfinished runs, or None when GitHub cannot be asked.
+
+    A scheduled check that found one leaves the update to it instead of queueing behind
+    it, where the next check would cancel it.
+    """
+    found: set[int] = set()
+    for status in UNFINISHED_STATUSES:
+        request = Request(
+            f"{api_url}/repos/{repository}/actions/workflows/{WORKFLOW_FILE}/runs"
+            f"?status={status}&per_page=100",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+                     "User-Agent": "trureturing-mdbook-freshness"},
+        )
+        try:
+            with urlopen(request, timeout=20) as response:
+                found.update(int(run["id"]) for run in json.loads(response.read())["workflow_runs"])
+        except (OSError, URLError, HTTPException, ValueError, KeyError, TypeError):
+            return None
+    found.discard(run_id)
+    return sorted(found)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--upstream", default=UPSTREAM_URL)
     parser.add_argument("--ref", default="refs/heads/dev")
     parser.add_argument("--provenance-url", default=PROVENANCE_URL)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--skip-while-running", action="store_true",
+                        help="build nothing while another run of this workflow is unfinished")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args(argv)
     try:
         result = probe(args.upstream, args.ref, args.provenance_url, force=args.force)
+        if args.skip_while_running and result["build_required"] == "true":
+            unfinished = other_unfinished_runs(
+                os.environ.get("GITHUB_API_URL", "https://api.github.com"),
+                os.environ.get("GITHUB_REPOSITORY", ""), int(os.environ.get("GITHUB_RUN_ID", "0")),
+                os.environ.get("GITHUB_TOKEN", ""),
+            )
+            if unfinished:
+                result.update(build_required="false", reason=f"run {unfinished[0]} is unfinished")
         if args.github_output:
             with args.github_output.open("a", encoding="utf-8") as output:
                 output.writelines(f"{key}={value}\n" for key, value in result.items())

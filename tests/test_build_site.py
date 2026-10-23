@@ -849,6 +849,22 @@ class EscapePseudoLinksTests(unittest.TestCase):
                 self.assertEqual(transformed, content.replace("[", "\\[", 1))
                 self.assertEqual(escape_pseudo_links.escape_pseudo_links(transformed), transformed)
 
+    def test_front_matter_folds_into_a_collapsed_yaml_block(self) -> None:
+        note = ("---\nbibkey: paper2026\nclaim: \"[a](b) and ```x```\"\nstrata_touched:\n"
+                "  - D5/S1/Example\n---\n\n# Paper\n\nBody [c](d) text.\n")
+        folded = escape_pseudo_links.fold_front_matter(note)
+        self.assertEqual(folded, (
+            '<details class="front-matter">\n<summary>Metadata</summary>\n\n````yaml\n'
+            'bibkey: paper2026\nclaim: "[a](b) and ```x```"\nstrata_touched:\n  - D5/S1/Example\n'
+            "````\n\n</details>\n\n\n# Paper\n\nBody [c](d) text.\n"
+        ))
+        # Inside the code block nothing is escaped; the prose after it still is.
+        escaped = escape_pseudo_links.escape_pseudo_links(folded)
+        self.assertIn('claim: "[a](b) and ```x```"', escaped)
+        self.assertIn("Body \\[c](d) text.", escaped)
+        for prose in ("# Paper\n", "Text\n---\nnot: front matter\n---\n", "---\nunclosed: yes\n"):
+            self.assertEqual(escape_pseudo_links.fold_front_matter(prose), prose)
+
     def test_mdbook_protocol_transforms_nested_chapters_in_memory(self) -> None:
         book = {
             "items": [

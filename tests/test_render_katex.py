@@ -36,6 +36,13 @@ class MathScanTests(unittest.TestCase):
         ])
         self.assertEqual(spans("$$\\$$ never closes\n"), [])
 
+    def test_front_matter_is_metadata_not_math(self) -> None:
+        note = "---\nclaim: \"$a(n)$ for n>1\"\nurl: x\n---\n\n# Title $x$\n"
+        self.assertEqual(spans(note), [("$x$", False)])
+        # Without a closing line there is no front matter, only prose.
+        self.assertEqual(spans("---\nclaim: $a$\n"), [("$a$", False)])
+        self.assertEqual(spans("Text\n---\n$b$\n---\n"), [("$b$", False)])
+
     def test_inline_formula_must_close_on_its_line_and_display_may_span_lines(self) -> None:
         self.assertEqual(spans("open $x\nnot closed$ here\n"), [])
         self.assertEqual(spans("$$a\n\nb$$\n"), [("$$a\n\nb$$", True)])

@@ -10,9 +10,9 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: github-pages-${{ github.ref }}
-  cancel-in-progress: false
+# Builds and deployments are serialized per ref by job-level groups. A scheduled check
+# that finds another run unfinished builds nothing rather than queueing behind it, where
+# the next check would cancel it.
 
 jobs:
   probe:
@@ -20,6 +20,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      actions: read
     outputs:
       upstream_sha: ${{ steps.freshness.outputs.upstream_sha }}
       generator_revision: ${{ steps.freshness.outputs.generator_revision }}
@@ -34,12 +35,15 @@ jobs:
         id: freshness
         env:
           EVENT_NAME: ${{ github.event_name }}
+          GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           args=()
           if [[ "$EVENT_NAME" != schedule ]]; then
             args+=(--force)
+          else
+            args+=(--skip-while-running)
           fi
           python3 scripts/site_freshness.py "${args[@]}" --github-output "$GITHUB_OUTPUT"
 
@@ -48,6 +52,9 @@ jobs:
     if: needs.probe.outputs.build_required == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    concurrency:
+      group: github-pages-build-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: read
     outputs:
@@ -148,6 +155,9 @@ jobs:
       - name: Link pages back to their upstream sources
         run: python3 scripts/render_page_sources.py .upstream "$RUNNER_TEMP/trureturing-mdbook-site-src" book
 
+      - name: Compact the page template
+        run: python3 scripts/compact_pages.py book
+
       - name: Extract native search labels
         run: python3 scripts/search_titles.py "$RUNNER_TEMP/trureturing-mdbook-site-src" book
 
@@ -168,6 +178,9 @@ jobs:
     if: github.ref == 'refs/heads/main' && needs.build.result == 'success' && needs.build.outputs.artifact_id != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: github-pages-deploy-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       pages: write
       id-token: write

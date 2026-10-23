@@ -47,6 +47,8 @@ class ResourceCollector(HTMLParser):
         "link": "href",
         "script": "src",
         "source": "src",
+        # Template icons point into the shared sprite (scripts/compact_pages.py).
+        "use": "href",
     }
 
     def __init__(self) -> None:
