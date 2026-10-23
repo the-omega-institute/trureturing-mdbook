@@ -87,6 +87,7 @@ python3 scripts/build-site.py /path/to/trureturing "$SITE_SRC"
 MDBOOK_BOOK__SRC="$SITE_SRC" mdbook build --dest-dir book
 python3 scripts/render_source_links.py /path/to/trureturing "$SITE_SRC" book
 python3 scripts/render_page_sources.py /path/to/trureturing "$SITE_SRC" book
+python3 scripts/compact_pages.py book
 python3 scripts/search_titles.py "$SITE_SRC" book
 pagefind_extended --site book --force-language zh
 python3 scripts/verify-site.py /path/to/trureturing "$SITE_SRC" book
@@ -95,6 +96,11 @@ python3 scripts/verify-site.py /path/to/trureturing "$SITE_SRC" book
 To reproduce a captured snapshot even if upstream HEAD has moved, add
 `--upstream-sha <full-commit-SHA>` to `build-site.py`. The checkout must contain that commit's
 complete history, including frozen-state additions.
+
+Problem dossiers and reading notes open with YAML front matter, which CommonMark would show as
+a run of prose between two rules. The prose preprocessor folds it, in memory, into a collapsed
+"Metadata" block holding the YAML verbatim as code; the formula scanner treats it as metadata,
+never math, for both the renderer and the release gate.
 
 Formulas are rendered by `scripts/render_katex.py`, an mdBook preprocessor that finds every
 `$…$`, ``$`…`$`` and `$$…$$` span with the same scanner the verifier counts with (`scripts/math_scan.py`)
@@ -149,6 +155,14 @@ example `D5/S0/Certificates/GreathouseLogTwoFloorRefutation.result`) links to it
 toolbar's GitHub button opens the upstream repository. Only the panel and the anchors around
 linked code are added; every inserted URL is absolute, so the release gate's relative-link
 checks are unchanged.
+
+Every page repeats about 18 KB of mdBook template around its content, a fifth of the book.
+`compact_pages.py` shrinks that part without changing what a page shows: outside `<main>`, each
+inline Font Awesome icon becomes a reference into one shared sprite, `fa-icons.svg`, which
+keeps the icons' license comment once; template HTML comments other than license comments
+(`<!--! …-->`) are dropped; and line indentation is removed while every line break stays.
+Content inside `<main>` is untouched. The release gate checks the sprite references like any
+other relative resource.
 
 Next, `search_titles.py` reads native rendered HTML head titles without changing the pages.
 It preserves the full title, including mdBook's book suffix, and omits absent or blank titles.

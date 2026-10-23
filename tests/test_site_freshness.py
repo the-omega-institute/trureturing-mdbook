@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -119,6 +120,56 @@ class FreshnessTests(unittest.TestCase):
         built = fixtures.build_site.build_site(self.upstream, self.output, upstream_sha=parsed["upstream_sha"])
         self.assertEqual(built["upstream_sha"], self.sha)
         self.assertEqual((self.output / "Blueprint/Test.md").read_text(), "# Test\n")
+
+    def serve_runs(self, runs_by_status):
+        owner = self
+        self.api_requests = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                owner.api_requests.append((self.path, self.headers.get("Authorization")))
+                status = self.path.rsplit("status=", 1)[1].split("&", 1)[0]
+                body = json.dumps({"workflow_runs": [{"id": run} for run in runs_by_status.get(status, [])]})
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(body.encode())
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=functools.partial(server.serve_forever, poll_interval=0.01), daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(thread.join)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_port}"
+
+    def test_other_unfinished_runs_exclude_this_run(self):
+        api = self.serve_runs({"in_progress": [7, 9], "queued": [11]})
+        self.assertEqual(freshness.other_unfinished_runs(api, "o/r", 9, "token"), [7, 11])
+        self.assertTrue(all(path.startswith("/repos/o/r/actions/workflows/pages.yml/runs?status=")
+                            and auth == "Bearer token" for path, auth in self.api_requests))
+        self.assertEqual(freshness.other_unfinished_runs(api, "o/r", 7, "t"), [9, 11])
+        # GitHub cannot be asked: build as usual rather than skip.
+        self.assertIsNone(freshness.other_unfinished_runs("http://127.0.0.1:0", "o/r", 7, "t"))
+
+    def test_scheduled_check_builds_nothing_while_another_run_is_unfinished(self):
+        self.prepare()
+        self.payload["upstream_sha"] = "0" * 40  # the deployment is stale
+        self.body = json.dumps(self.payload).encode()
+        command = [sys.executable, str(fixtures.ROOT / "scripts/site_freshness.py"),
+                   "--upstream", str(self.upstream), "--ref", "refs/heads/main",
+                   "--provenance-url", self.url, "--skip-while-running"]
+        for runs, required, reason in (({"in_progress": [41, 42]}, "false", "run 41 is unfinished"),
+                                       ({"in_progress": [42]}, "true", "upstream-changed")):
+            with self.subTest(runs=runs):
+                environment = {**os.environ, "GITHUB_API_URL": self.serve_runs(runs),
+                               "GITHUB_REPOSITORY": "o/r", "GITHUB_RUN_ID": "42", "GITHUB_TOKEN": "t"}
+                result = json.loads(subprocess.run(command, check=True, capture_output=True, text=True,
+                                                   env=environment).stdout)
+                self.assertEqual((result["build_required"], result["reason"]), (required, reason))
+                self.assertEqual(result["upstream_sha"], self.sha)
 
     def test_upstream_probe_failure_does_not_publish_invented_revision(self):
         self.prepare()

@@ -983,10 +983,8 @@ class OpenProblemTests(unittest.TestCase):
         self.assertEqual(verify_site.markdown_math_token_count(page.encode("utf-8")), 0)
         footer = page.split("## How this list is made\n", 1)[1]
         self.assertIn("The citation and claim of each entry are copied from the reading note's front matter", footer)
-        # The mock book renders no KaTeX; the fixture note's own page carries the claim's `$…$`.
-        book = self.mock_book()
-        (book / "Library/Words/paper2026.html").write_bytes(b"<h1>Fixture</h1>" + verify_site.KATEX_MARKER)
-        verify_site.verify(self.upstream, self.output, book)
+        # The claim's `$…$` sits in the note's front matter, which holds no formulas.
+        verify_site.verify(self.upstream, self.output, self.mock_book())
 
     def test_renders_readable_resource_labels_without_research_categories(self) -> None:
         self.mixed_fixture()

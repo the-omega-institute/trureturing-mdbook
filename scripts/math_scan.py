@@ -8,7 +8,8 @@ Rules, inherited from the verifier that used to hold them alone: fenced code blo
 at least as long) and inline code spans are not math; a ``$`` preceded by an odd
 number of backslashes is text; ``$$…$$`` may span lines; ``$…$`` must close on its
 own line. GitHub-style ``$`…`$`` is also inline math, with its backticks excluded
-from the TeX body.
+from the TeX body. A leading YAML front matter block is metadata, never math: the site
+shows it as a folded code block.
 """
 
 from __future__ import annotations
@@ -68,6 +69,22 @@ def _fence_line(body: bytes, in_fence: tuple[bytes, int] | None) -> tuple[bool, 
     return True, in_fence
 
 
+def front_matter_end(content: bytes) -> int:
+    """The length of a leading YAML front matter block between ``---`` lines, or 0.
+
+    Problem dossiers and reading notes open with one; a block that never closes is prose.
+    """
+    lines = content.splitlines(keepends=True)
+    if not lines or lines[0].rstrip(b"\r\n") != b"---":
+        return 0
+    position = len(lines[0])
+    for line in lines[1:]:
+        position += len(line)
+        if line.rstrip(b"\r\n") in (b"---", b"..."):
+            return position
+    return 0
+
+
 def outside_fences(content: str) -> str:
     """Return ``content`` with fenced code lines (markers included) blanked, line count kept."""
     lines = []
@@ -86,8 +103,8 @@ def math_spans(content: bytes) -> list[tuple[int, int, bool]]:
     text = bytearray()
     offsets: list[int] = []
     in_fence: tuple[bytes, int] | None = None
-    position = 0
-    for line in content.splitlines(keepends=True):
+    position = front_matter_end(content)
+    for line in content[position:].splitlines(keepends=True):
         base = position
         position += len(line)
         body = line.rstrip(b"\r\n")
