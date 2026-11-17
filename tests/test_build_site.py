@@ -151,6 +151,18 @@ class BuildSiteTests(unittest.TestCase):
         self.assertEqual(on_disk, provenance)
         self.assertNotIn("prose_pseudo_link_count", provenance)
 
+    def test_projection_carries_the_pinned_katex_assets(self) -> None:
+        self.make_fixture()
+        build_site.build_site(self.upstream, self.output)
+        assets = build_site.katex_assets()
+        self.assertIn("katex-page.js", assets)
+        for name, path in assets.items():
+            with self.subTest(name=name):
+                self.assertEqual((self.output / "katex" / name).read_bytes(), path.read_bytes())
+        published = {path.relative_to(self.output / "katex").as_posix()
+                     for path in (self.output / "katex").rglob("*") if path.is_file()}
+        self.assertEqual(published, set(assets))
+
     def test_rebuild_removes_stale_derived_files(self) -> None:
         self.make_fixture()
         build_site.build_site(self.upstream, self.output)
@@ -720,15 +732,29 @@ class VerifySiteTests(unittest.TestCase):
         with self.assertRaisesRegex(verify_site.VerificationError, "broken relative"):
             verify_site.validate_links(self.book, [b"index.html"])
 
-    def test_residual_double_dollars_warn_without_failing_the_site(self) -> None:
-        import contextlib, io
-        source = self.book / "source"
-        book = self.book / "book"
+    LOADS_KATEX = (
+        '<link rel="stylesheet" href="../katex/katex.min.css">'
+        '<script defer="" src="../katex/katex.min.js"></script>'
+        '<script defer="" src="../katex/katex-page.js"></script>'
+    )
+
+    def math_page(self, markdown: str, html: str, *, name: str = "math") -> tuple[Path, Path]:
+        source = self.book / f"{name}-source"
+        book = self.book / f"{name}-book"
         (source / "Blueprint").mkdir(parents=True)
         (book / "Blueprint").mkdir(parents=True)
-        (source / "Blueprint/Page.md").write_text("good $x$\n", encoding="utf-8")
-        (book / "Blueprint/Page.html").write_text(
-            '<span class="katex">x</span> cost $$ left $$', encoding="utf-8"
+        (source / "Blueprint/Page.md").write_text(markdown, encoding="utf-8")
+        (book / "Blueprint/Page.html").write_text(html, encoding="utf-8")
+        return source, book
+
+    def check_math(self, source: Path, book: Path) -> dict[str, int]:
+        return verify_site.validate_math(source, book, {b"Blueprint/Page.md"}, [b"Blueprint/Page.html"])
+
+    def test_residual_double_dollars_warn_without_failing_the_site(self) -> None:
+        import contextlib, io
+        source, book = self.math_page(
+            "good $x$\n",
+            self.LOADS_KATEX + '<span class="katex-source">x</span> cost $$ left $$',
         )
         (book / "print.html").write_text("cost $$ left $$", encoding="utf-8")
         stderr = io.StringIO()
@@ -743,44 +769,101 @@ class VerifySiteTests(unittest.TestCase):
         self.assertIn("Blueprint/Page.md: 2 '$$' delimiters left as text", warnings[0])
 
     def test_partial_math_rendering_fails_closed(self) -> None:
-        source = self.book / "source"
-        book = self.book / "book"
-        (source / "Blueprint").mkdir(parents=True)
-        book.mkdir()
-        (source / "Blueprint/Page.md").write_text(
-            "good $x+1$ and bad $\\notacommand{x}$\n", encoding="utf-8"
-        )
-        (book / "Blueprint").mkdir()
-        (book / "Blueprint/Page.html").write_text(
-            '<span class="katex"><span>good</span></span>', encoding="utf-8"
+        source, book = self.math_page(
+            "good $x+1$ and bad $\\notacommand{x}$\n",
+            self.LOADS_KATEX + '<span class="katex-source">x+1</span>',
         )
         with self.assertRaisesRegex(verify_site.VerificationError, "math token mismatch"):
-            verify_site.validate_math(
-                source,
-                book,
-                {b"Blueprint/Page.md"},
-                [b"Blueprint/Page.html"],
-            )
+            self.check_math(source, book)
 
     def test_fallback_formulas_count_as_rendered_and_are_reported(self) -> None:
-        source = self.book / "fallback-source"
-        book = self.book / "fallback-book"
-        (source / "Blueprint").mkdir(parents=True)
-        (book / "Blueprint").mkdir(parents=True)
-        (source / "Blueprint/Page.md").write_text(
-            "good $x+1$ and bad $\\notacommand{x}$\n", encoding="utf-8"
+        source, book = self.math_page(
+            "good $x+1$ and bad $\\notacommand{x}$ and $\\qc$\n",
+            self.LOADS_KATEX + '<span class="katex-source">x+1</span> '
+            '<code class="katex-fallback">&#92;notacommand&#123;x&#125;</code> '
+            '<span class="katex-source" data-lenient="true">\\qc</span>',
         )
-        (book / "Blueprint/Page.html").write_text(
-            '<span class="katex"><span>good</span></span> '
-            '<code class="katex-fallback">&#92;notacommand&#123;x&#125;</code>',
-            encoding="utf-8",
-        )
-        stats = verify_site.validate_math(
-            source, book, {b"Blueprint/Page.md"}, [b"Blueprint/Page.html"],
-        )
-        self.assertEqual(stats["expected_math_tokens"], 2)
-        self.assertEqual(stats["rendered_katex_nodes"], 1)
+        stats = self.check_math(source, book)
+        self.assertEqual(stats["expected_math_tokens"], 3)
+        self.assertEqual(stats["source_formulas"], 2)
+        self.assertEqual(stats["lenient_formulas"], 1)
         self.assertEqual(stats["fallback_formulas"], 1)
+        self.assertEqual(stats["source_math_pages"], 1)
+
+    def test_tex_altered_by_markdown_fails_closed(self) -> None:
+        for html in ('<span class="katex-source">f’(x) &lt; 1</span>',
+                     '<span class="katex-source" data-display="true">f\'(x) &lt; 1</span>',
+                     '<code class="katex-fallback">f(x) &lt; 1</code>'):
+            with self.subTest(html=html):
+                source, book = self.math_page("$f'(x) < 1$\n", self.LOADS_KATEX + html,
+                                              name=str(abs(hash(html))))
+                with self.assertRaisesRegex(verify_site.VerificationError, "math source mismatch"):
+                    self.check_math(source, book)
+
+    def test_source_text_matches_in_any_order_with_lines_and_unescaped_backslashes(self) -> None:
+        markdown = (
+            "A[^n] $a < b$ and $\\\\mathcal{Q}^+_\\\\alpha$ and\n\n"
+            "$$x \\\\ % note\ny$$\n\n[^n]: $\\int f$ and bad $\\frac{$\n"
+        )
+        html = self.LOADS_KATEX + (
+            '<span class="katex-source">a &lt; b</span>'
+            '<span class="katex-source">\\mathcal{Q}^+_\\alpha</span>'
+            '<span class="katex-source" data-display="true">x \\\\ % note\ny</span>'
+            '<code class="katex-fallback">\\frac{</code>'
+            '<span class="katex-source">\\int f</span>'
+        )
+        source, book = self.math_page(markdown, html)
+        self.assertEqual(self.check_math(source, book)["source_formulas"], 4)
+
+    def test_formulas_markdown_put_in_code_warn_and_are_still_checked(self) -> None:
+        import contextlib, io
+        markdown = "Text\n\n    $t_{n+1}$ indented\n\nand $x$\n"
+        html = self.LOADS_KATEX + (
+            '<pre><code>&lt;span class="katex-source"&gt;t&amp;#95;&amp;#123;n&amp;#43;1&amp;#125;'
+            '&lt;/span&gt; indented\n</code></pre><p>and <span class="katex-source">x</span></p>'
+        )
+        source, book = self.math_page(markdown, html)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            stats = self.check_math(source, book)
+        self.assertEqual(stats["formulas_in_code"], 1)
+        self.assertEqual(stats["source_formulas"], 1)
+        self.assertIn("Blueprint/Page.md: 1 formulas fall inside a code span or block", stderr.getvalue())
+        # The TeX in code is still compared with the Markdown.
+        source, book = self.math_page(markdown, html.replace("&amp;#43;1", "&amp;#45;1"), name="altered")
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(verify_site.VerificationError, "math source mismatch"):
+                self.check_math(source, book)
+
+    def test_math_pages_must_load_the_katex_assets(self) -> None:
+        source, book = self.math_page("$x$\n", '<span class="katex-source">x</span>')
+        with self.assertRaisesRegex(verify_site.VerificationError, "do not load the KaTeX assets"):
+            self.check_math(source, book)
+
+    def test_katex_assets_match_the_pinned_package_exactly(self) -> None:
+        import shutil
+        book = self.book / "assets-book"
+        book.mkdir()
+        self.assertEqual(verify_site.validate_katex_assets(book, False), 0)
+        with self.assertRaisesRegex(verify_site.VerificationError, "required directory is missing"):
+            verify_site.validate_katex_assets(book, True)
+        assets = verify_site.katex_assets()
+        for name, path in assets.items():
+            destination = book / "katex" / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, destination)
+        self.assertEqual(verify_site.validate_katex_assets(book, True), len(assets))
+        (book / "katex" / "katex-page.js").write_text("// changed\n", encoding="utf-8")
+        with self.assertRaisesRegex(verify_site.VerificationError, "katex-page.js"):
+            verify_site.validate_katex_assets(book, True)
+        shutil.copyfile(assets["katex-page.js"], book / "katex" / "katex-page.js")
+        (book / "katex" / "extra.js").write_text("", encoding="utf-8")
+        with self.assertRaisesRegex(verify_site.VerificationError, "extra.js"):
+            verify_site.validate_katex_assets(book, False)
+        (book / "katex" / "extra.js").unlink()
+        (book / "katex" / "fonts" / "KaTeX_Main-Regular.woff2").unlink()
+        with self.assertRaisesRegex(verify_site.VerificationError, "KaTeX_Main-Regular.woff2"):
+            verify_site.validate_katex_assets(book, True)
 
 
 class EscapePseudoLinksTests(unittest.TestCase):

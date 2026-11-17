@@ -24,7 +24,7 @@ SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 GENERATOR_INPUTS = (
     "book.toml", ".github/workflows/pages.yml", "package.json", "package-lock.json",
     "scripts/build-site.py", "scripts/build_warnings.py", "scripts/escape_pseudo_links.py",
-    "scripts/katex_render.js", "scripts/math_scan.py", "scripts/open_problems.py",
+    "scripts/katex_render.js", "scripts/katex_page.js", "scripts/math_scan.py", "scripts/open_problems.py",
     "scripts/render_katex.py",
     "scripts/render_source_links.py", "scripts/render_page_sources.py", "scripts/compact_pages.py",
     "scripts/source_tree.py", "scripts/verify-site.py",

@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// Render a JSON array of {tex, display} from stdin. The first output line is
-// {"version"}; then one JSON line per formula, in order: {"html"} with "lenient" when an
-// undefined macro is shown in red, or {"html": null, "failure"}. Streaming keeps the
-// book's ~400 MB of KaTeX HTML out of the V8 heap (one array of it ran out of memory).
+// Check a JSON array of {tex, display} from stdin against the pinned KaTeX package. The
+// first output line is {"version"}; then one JSON line per formula, in order: {"tex"} with
+// the TeX the browser is to render (and "lenient" when an undefined macro is shown in red),
+// or {"tex": null, "failure"}. The browser renders that TeX with the same options
+// (scripts/katex_page.js), so a formula that renders here renders there.
 // KaTeX runs in Node's V8, whose stack is not the 256 KiB QuickJS budget that made
 // mdbook-katex give up on deeply nested formulas. A formula KaTeX cannot render even
-// with the package macros below, undone Markdown escaping, or (for a paper-local
-// macro) its lenient mode is reported as a failure and its slot left null for the
-// caller's fallback.
+// with the package macros, undone Markdown escaping, or (for a paper-local macro) its
+// lenient mode is reported as a failure and its slot left null for the caller's fallback.
 "use strict";
 
 const fs = require("fs");
@@ -22,45 +22,15 @@ try {
   }
   throw error;
 }
-
-// Commands from LaTeX packages that upstream quotes use (amsmath, dsfont, physics,
-// mathtools-style delimiters, esvect, nicefrac) and that KaTeX does not define.
-const MACROS = {
-  "\\Tr": "\\operatorname{Tr}",
-  "\\tr": "\\operatorname{tr}",
-  "\\trace": "\\operatorname{Tr}",
-  "\\diag": "\\operatorname{diag}",
-  "\\Tilde": "\\tilde",
-  "\\wt": "\\widetilde",
-  "\\mathds": "\\mathbb",
-  "\\mathpzc": "\\mathcal",
-  "\\ketbra": "\\lvert #1\\rangle\\langle #2\\rvert",
-  "\\dyad": "\\lvert #1\\rangle\\langle #1\\rvert",
-  "\\floor": "\\left\\lfloor #1\\right\\rfloor",
-  "\\ceil": "\\left\\lceil #1\\right\\rceil",
-  "\\norm": "\\left\\lVert #1\\right\\rVert",
-  "\\vv": "\\vec{#1}",
-  "\\nicefrac": "{}^{#1}\\!/\\!{}_{#2}",
-  "\\mbox": "\\text{#1}",
-  "\\emph": "\\textit{#1}",
-  "\\normalfont": "",
-};
+const { katexOptions } = require("./katex_page.js");
 
 function render(tex, display, lenient) {
-  // A fresh copy: \gdef in one formula must not leak into the next.
-  return katex.renderToString(tex, {
-    displayMode: display,
-    throwOnError: !lenient,
-    trust: false,
-    // LaTeX-compatibility notices change nothing in the output; thousands flood the log.
-    strict: "ignore",
-    output: "html",
-    macros: { ...MACROS },
-  });
+  return katex.renderToString(tex, katexOptions(display, lenient));
 }
 
-// Returns [html, lenient] or throws the error of the formula as written.
-function renderItem(item) {
+// Returns [tex, lenient] for the TeX that renders, or throws the error of the formula
+// as written.
+function checkItem(item) {
   const display = Boolean(item.display);
   const candidates = [item.tex];
   // Markdown-escaped TeX writes `\\mathcal` and `\\\\` for `\mathcal` and `\\`;
@@ -69,7 +39,8 @@ function renderItem(item) {
   let firstError = null;
   for (const tex of candidates) {
     try {
-      return [render(tex, display, false), false];
+      render(tex, display, false);
+      return [tex, false];
     } catch (error) {
       firstError = firstError || error;
     }
@@ -79,7 +50,7 @@ function renderItem(item) {
   if (/Undefined control sequence/.test(String(firstError && firstError.message))) {
     for (const tex of candidates) {
       const html = render(tex, display, true);
-      if (!html.startsWith('<span class="katex-error"')) return [html, true];
+      if (!html.startsWith('<span class="katex-error"')) return [tex, true];
     }
   }
   throw firstError;
@@ -91,10 +62,10 @@ process.stdout.write(JSON.stringify({ version: katex.version }) + "\n");
 for (const item of items) {
   let line;
   try {
-    const [html, lenient] = renderItem(item);
-    line = lenient ? { html, lenient: true } : { html };
+    const [tex, lenient] = checkItem(item);
+    line = lenient ? { tex, lenient: true } : { tex };
   } catch (error) {
-    line = { html: null, failure: error && error.message ? error.message : String(error) };
+    line = { tex: null, failure: error && error.message ? error.message : String(error) };
   }
   process.stdout.write(JSON.stringify(line) + "\n");
 }
