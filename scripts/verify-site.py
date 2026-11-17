@@ -49,6 +49,13 @@ FORMULA_RE = re.compile(
     rb'<(span|code) class="katex-(source|fallback)"( data-display="true")?'
     rb'( data-lenient="true")?>([^<]*)</\1>'
 )
+# The same element inside a code span or block, where Markdown shows the markup as text:
+# math_scan does not know every CommonMark code region (an indented block, a code span an
+# upstream typo opened). Its text holds the TeX escaped twice.
+CODE_FORMULA_RE = re.compile(
+    rb'&lt;(span|code) class="katex-(source|fallback)"( data-display="true")?'
+    rb'( data-lenient="true")?&gt;(.*?)&lt;/\1&gt;'
+)
 # What a page with a source element must load, each relative to the page.
 KATEX_PAGE_ASSETS = tuple(
     f'{KATEX_DIRECTORY}/{name}"'.encode() for name in (STYLESHEET, LIBRARY, PAGE_SCRIPT)
@@ -223,6 +230,14 @@ def formula_elements(content: bytes) -> list[tuple[str, bool, bool, str]]:
     ]
 
 
+def code_formula_elements(content: bytes) -> list[tuple[str, bool, bool, str]]:
+    """The same for formula elements Markdown placed in code and shows as text."""
+    return [
+        (kind.decode(), bool(display), bool(lenient), unescape(unescape(text.decode("utf-8"))))
+        for _tag, kind, display, lenient, text in CODE_FORMULA_RE.findall(content)
+    ]
+
+
 def unmatched_formulas(
     expected: list[tuple[str, bool]], found: list[tuple[str, bool, bool, str]],
 ) -> list[str]:
@@ -284,6 +299,7 @@ def validate_math(
     source_tokens: dict[bytes, int] = {}
     fallback_tokens: dict[bytes, int] = {}
     lenient_tokens = 0
+    code_tokens = 0
     mismatches: list[str] = []
     altered: list[str] = []
     for source_path in sorted(source_paths):
@@ -292,17 +308,23 @@ def validate_math(
         html_path = source_path[:-3] + b".html"
         content = bytes_path(book, html_path).read_bytes()
         found = formula_elements(content)
+        in_code = code_formula_elements(content)
         source_tokens[html_path] = sum(kind == "source" for kind, *_ in found)
         fallback_tokens[html_path] = sum(kind == "fallback" for kind, *_ in found)
         lenient_tokens += sum(lenient for _kind, _display, lenient, _text in found)
         markers = content.count(SOURCE_MARKER) + content.count(FALLBACK_MARKER)
-        if markers != len(found) or len(found) != len(expected):
+        if markers != len(found) or len(found) + len(in_code) != len(expected):
             mismatches.append(
                 f"{os.fsdecode(source_path)} expected {len(expected)} formulas, "
-                f"found {markers}"
+                f"found {markers + len(in_code)}"
             )
             continue
-        for tex in unmatched_formulas(expected, found):
+        if in_code:
+            # Markdown made the formula part of a code region; the page is still published.
+            code_tokens += len(in_code)
+            warn("Formula in code", f"{os.fsdecode(source_path)}: {len(in_code)} formulas "
+                 "fall inside a code span or block and are shown as markup")
+        for tex in unmatched_formulas(expected, found + in_code):
             altered.append(f"{os.fsdecode(source_path)}: {tex[:80]!r}")
     if mismatches:
         raise VerificationError("math token mismatch; " + "; ".join(mismatches[:20]))
@@ -316,6 +338,7 @@ def validate_math(
         "source_formulas": sum(source_tokens.values()),
         "lenient_formulas": lenient_tokens,
         "fallback_formulas": sum(fallback_tokens.values()),
+        "formulas_in_code": code_tokens,
         "source_math_pages": source_pages,
         "residual_double_dollars": residual,
     }

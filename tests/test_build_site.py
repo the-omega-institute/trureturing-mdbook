@@ -815,6 +815,26 @@ class VerifySiteTests(unittest.TestCase):
         source, book = self.math_page(markdown, html)
         self.assertEqual(self.check_math(source, book)["source_formulas"], 4)
 
+    def test_formulas_markdown_put_in_code_warn_and_are_still_checked(self) -> None:
+        import contextlib, io
+        markdown = "Text\n\n    $t_{n+1}$ indented\n\nand $x$\n"
+        html = self.LOADS_KATEX + (
+            '<pre><code>&lt;span class="katex-source"&gt;t&amp;#95;&amp;#123;n&amp;#43;1&amp;#125;'
+            '&lt;/span&gt; indented\n</code></pre><p>and <span class="katex-source">x</span></p>'
+        )
+        source, book = self.math_page(markdown, html)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            stats = self.check_math(source, book)
+        self.assertEqual(stats["formulas_in_code"], 1)
+        self.assertEqual(stats["source_formulas"], 1)
+        self.assertIn("Blueprint/Page.md: 1 formulas fall inside a code span or block", stderr.getvalue())
+        # The TeX in code is still compared with the Markdown.
+        source, book = self.math_page(markdown, html.replace("&amp;#43;1", "&amp;#45;1"), name="altered")
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(verify_site.VerificationError, "math source mismatch"):
+                self.check_math(source, book)
+
     def test_math_pages_must_load_the_katex_assets(self) -> None:
         source, book = self.math_page("$x$\n", '<span class="katex-source">x</span>')
         with self.assertRaisesRegex(verify_site.VerificationError, "do not load the KaTeX assets"):

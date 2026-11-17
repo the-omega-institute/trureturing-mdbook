@@ -38,9 +38,10 @@ its Lean module; a problem whose reading note is not written yet cites its dossi
 URL; and a dossier locator that differs from its note's (another arXiv version or anchor) is
 no defect, as the entry cites the note. What cannot is shown in a degraded form, and the build
 log carries a GitHub warning naming the upstream file to fix: a formula KaTeX still cannot
-render is shown as its TeX source; an anchor whose relative target is malformed, leaves the
-site or does not exist keeps its text but loses its link; unpaired `$$` delimiters stay as
-text; and a dossier, reading note or resolution record the problem page cannot interpret is
+render is shown as its TeX source; a formula that Markdown places inside code (an indented
+block, or a code span a stray backtick opens) is shown as markup; an anchor whose relative
+target is malformed, leaves the site or does not exist keeps its text but loses its link;
+unpaired `$$` delimiters stay as text; and a dossier, reading note or resolution record the problem page cannot interpret is
 left out of that page (the files themselves are still published). Failures that do not belong
 to one upstream file — Git reads, the projected source
 set, page mappings, provenance, tool versions, missing non-anchor resources and the artifact
