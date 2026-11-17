@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
+from html import unescape
 import json
 import os
 import posixpath
@@ -20,20 +22,37 @@ try:
     from site_freshness import generator_revision, provenance_is_usable
     from math_scan import math_spans
     from open_problems import PAGE_PATH, OpenProblemError, derive_open_problems
+    from render_katex import (
+        ASSET_DIRECTORY as KATEX_DIRECTORY, LIBRARY, PAGE_SCRIPT, STYLESHEET, RenderError,
+        formula_texts, katex_assets,
+    )
     from source_tree import is_published_path, list_source_entries
 except ModuleNotFoundError:
     from scripts.build_warnings import warn
     from scripts.site_freshness import generator_revision, provenance_is_usable
     from scripts.math_scan import math_spans
     from scripts.open_problems import PAGE_PATH, OpenProblemError, derive_open_problems
+    from scripts.render_katex import (
+        ASSET_DIRECTORY as KATEX_DIRECTORY, LIBRARY, PAGE_SCRIPT, STYLESHEET, RenderError,
+        formula_texts, katex_assets,
+    )
     from scripts.source_tree import is_published_path, list_source_entries
 
 
 SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
 ARTIFACT_LIMIT_BYTES = 1_000_000_000
-KATEX_MARKER = b'class="katex"'
-# render_katex.FALLBACK_CLASS: a formula KaTeX could not parse, shown as its source.
-FALLBACK_MARKER = b'class="katex-fallback"'
+# render_katex.SOURCE_CLASS holds the TeX the page script renders; FALLBACK_CLASS the
+# source of a formula KaTeX could not render. Text in either has no raw "<".
+SOURCE_MARKER = b'<span class="katex-source"'
+FALLBACK_MARKER = b'<code class="katex-fallback"'
+FORMULA_RE = re.compile(
+    rb'<(span|code) class="katex-(source|fallback)"( data-display="true")?'
+    rb'( data-lenient="true")?>([^<]*)</\1>'
+)
+# What a page with a source element must load, each relative to the page.
+KATEX_PAGE_ASSETS = tuple(
+    f'{KATEX_DIRECTORY}/{name}"'.encode() for name in (STYLESHEET, LIBRARY, PAGE_SCRIPT)
+)
 
 
 class VerificationError(RuntimeError):
@@ -196,6 +215,43 @@ def validate_page_mapping(book: Path, source_paths: set[bytes]) -> set[bytes]:
     return mapped
 
 
+def formula_elements(content: bytes) -> list[tuple[str, bool, bool, str]]:
+    """(kind, display, lenient, decoded text) of each formula element on a page."""
+    return [
+        (kind.decode(), bool(display), bool(lenient), unescape(text.decode("utf-8")))
+        for _tag, kind, display, lenient, text in FORMULA_RE.findall(content)
+    ]
+
+
+def unmatched_formulas(
+    expected: list[tuple[str, bool]], found: list[tuple[str, bool, bool, str]],
+) -> list[str]:
+    """TeX of each expected formula that no element on the page holds.
+
+    A source element holds the TeX with line breaks kept, or with Markdown-escaped
+    backslashes undone when only that rendered; a fallback holds it with line breaks and
+    tabs as spaces (render_katex.inert_text). Footnotes can move, so order is not compared.
+    """
+    remaining = Counter((kind, display, text) for kind, display, _lenient, text in found)
+
+    def take(key: tuple[str, bool, str]) -> bool:
+        if remaining[key] > 0:
+            remaining[key] -= 1
+            return True
+        return False
+
+    unescaped: list[tuple[str, bool]] = []
+    for tex, display in expected:
+        kept = tex.replace("\r\n", "\n").replace("\r", "\n")
+        flat = re.sub(r"[\r\n\t]", " ", tex)
+        if not take(("source", display, kept)) and not take(("fallback", display, flat)):
+            unescaped.append((kept, display))
+    return [
+        tex for tex, display in unescaped
+        if not take(("source", display, tex.replace("\\\\", "\\")))
+    ]
+
+
 def validate_math(
     source: Path,
     book: Path,
@@ -203,7 +259,8 @@ def validate_math(
     all_html: list[bytes],
 ) -> dict[str, int]:
     residual = 0
-    all_katex_pages = 0
+    source_pages = 0
+    unloaded: list[str] = []
     for html_path in all_html:
         content = bytes_path(book, html_path).read_bytes()
         count = content.count(b"$$")
@@ -213,38 +270,83 @@ def validate_math(
             warn("Unrendered math", f"{os.fsdecode(html_path[:-5])}.md: "
                  f"{count} '$$' delimiters left as text")
         residual += count
-        if KATEX_MARKER in content:
-            all_katex_pages += 1
+        if SOURCE_MARKER in content:
+            source_pages += 1
+            if not all(asset in content for asset in KATEX_PAGE_ASSETS):
+                unloaded.append(os.fsdecode(html_path))
+    if unloaded:
+        raise VerificationError(
+            f"pages with math do not load the KaTeX assets ({len(unloaded)}): "
+            + ", ".join(unloaded[:20])
+        )
 
-    expected_tokens: dict[bytes, int] = {
-        path: markdown_math_token_count(bytes_path(source, path).read_bytes())
-        for path in source_paths
-    }
-    rendered_tokens: dict[bytes, int] = {}
+    expected_tokens: dict[bytes, int] = {}
+    source_tokens: dict[bytes, int] = {}
     fallback_tokens: dict[bytes, int] = {}
+    lenient_tokens = 0
     mismatches: list[str] = []
-    for source_path, expected_count in expected_tokens.items():
+    altered: list[str] = []
+    for source_path in sorted(source_paths):
+        expected = formula_texts(bytes_path(source, source_path).read_bytes())
+        expected_tokens[source_path] = len(expected)
         html_path = source_path[:-3] + b".html"
         content = bytes_path(book, html_path).read_bytes()
-        rendered_tokens[html_path] = content.count(KATEX_MARKER)
-        fallback_tokens[html_path] = content.count(FALLBACK_MARKER)
-        actual_count = rendered_tokens[html_path] + fallback_tokens[html_path]
-        if actual_count != expected_count:
+        found = formula_elements(content)
+        source_tokens[html_path] = sum(kind == "source" for kind, *_ in found)
+        fallback_tokens[html_path] = sum(kind == "fallback" for kind, *_ in found)
+        lenient_tokens += sum(lenient for _kind, _display, lenient, _text in found)
+        markers = content.count(SOURCE_MARKER) + content.count(FALLBACK_MARKER)
+        if markers != len(found) or len(found) != len(expected):
             mismatches.append(
-                f"{os.fsdecode(source_path)} expected {expected_count} KaTeX nodes, "
-                f"found {actual_count}"
+                f"{os.fsdecode(source_path)} expected {len(expected)} formulas, "
+                f"found {markers}"
             )
+            continue
+        for tex in unmatched_formulas(expected, found):
+            altered.append(f"{os.fsdecode(source_path)}: {tex[:80]!r}")
     if mismatches:
         raise VerificationError("math token mismatch; " + "; ".join(mismatches[:20]))
+    if altered:
+        raise VerificationError(
+            f"math source mismatch ({len(altered)}): " + "; ".join(altered[:20])
+        )
     return {
         "expected_math_pages": sum(count > 0 for count in expected_tokens.values()),
-        "mapped_katex_pages": sum(count > 0 for count in rendered_tokens.values()),
         "expected_math_tokens": sum(expected_tokens.values()),
-        "rendered_katex_nodes": sum(rendered_tokens.values()),
+        "source_formulas": sum(source_tokens.values()),
+        "lenient_formulas": lenient_tokens,
         "fallback_formulas": sum(fallback_tokens.values()),
-        "all_html_katex_pages": all_katex_pages,
+        "source_math_pages": source_pages,
         "residual_double_dollars": residual,
     }
+
+
+def validate_katex_assets(book: Path, required: bool) -> int:
+    """The book's KaTeX directory holds exactly the pinned package's files and the page
+    script, byte for byte; it must exist when a page has math for the browser to render."""
+    directory = bytes_path(book, os.fsencode(KATEX_DIRECTORY))
+    if not required and not directory.exists():
+        return 0
+    try:
+        expected = {os.fsencode(name): path for name, path in katex_assets().items()}
+    except RenderError as exc:
+        raise VerificationError(str(exc)) from exc
+    actual = set(walk_regular_files(directory))
+    if actual != set(expected):
+        missing = sorted(set(expected) - actual)
+        extra = sorted(actual - set(expected))
+        raise VerificationError(
+            "KaTeX assets differ from the pinned package; "
+            f"missing: {[os.fsdecode(path) for path in missing[:10]]}; "
+            f"extra: {[os.fsdecode(path) for path in extra[:10]]}"
+        )
+    changed = [
+        os.fsdecode(name) for name, path in sorted(expected.items())
+        if bytes_path(directory, name).read_bytes() != path.read_bytes()
+    ]
+    if changed:
+        raise VerificationError("KaTeX assets differ from the pinned package: " + ", ".join(changed))
+    return len(expected)
 
 
 def parse_resources(path: Path) -> list[str]:
@@ -383,6 +485,7 @@ def verify(upstream: Path, source: Path, book: Path) -> dict[str, object]:
     if not all_html:
         raise VerificationError("the site artifact contains no HTML")
     math_stats = validate_math(source, book, expected, all_html)
+    katex_asset_count = validate_katex_assets(book, math_stats["source_math_pages"] > 0)
     pseudo_links: list[dict[str, str]] = []
     checked_links = _validate_links(book, all_html, pseudo_links)
     size = artifact_size(book)
@@ -403,6 +506,7 @@ def verify(upstream: Path, source: Path, book: Path) -> dict[str, object]:
             "count": len(pseudo_links),
             "items": pseudo_links,
         },
+        "katex_assets": katex_asset_count,
         "artifact_bytes": size,
         "artifact_limit_bytes": ARTIFACT_LIMIT_BYTES,
     }

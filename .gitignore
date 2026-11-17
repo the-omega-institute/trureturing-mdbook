@@ -29,6 +29,7 @@
 !/scripts/math_scan.py
 !/scripts/render_katex.py
 !/scripts/katex_render.js
+!/scripts/katex_page.js
 !/scripts/search_titles.py
 !/scripts/search_titles.js
 !/package.json

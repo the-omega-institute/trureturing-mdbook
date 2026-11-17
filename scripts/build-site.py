@@ -21,6 +21,7 @@ from urllib.parse import quote_from_bytes
 try:
     from build_warnings import warn
     from math_scan import outside_fences
+    from render_katex import ASSET_DIRECTORY as KATEX_DIRECTORY, RenderError, katex_assets
     from render_source_links import SourceLinkError, regular_source_paths
     from search_titles import search_bootstrap
     from site_freshness import generator_revision, snapshot_freshness
@@ -34,6 +35,7 @@ try:
 except ModuleNotFoundError:
     from scripts.build_warnings import warn
     from scripts.math_scan import outside_fences
+    from scripts.render_katex import ASSET_DIRECTORY as KATEX_DIRECTORY, RenderError, katex_assets
     from scripts.render_source_links import SourceLinkError, regular_source_paths
     from scripts.search_titles import search_bootstrap
     from scripts.site_freshness import generator_revision, snapshot_freshness
@@ -700,6 +702,19 @@ def safe_output_path(upstream: Path, output: Path) -> Path:
     return output
 
 
+def write_katex_assets(staging: Path) -> None:
+    """Copy the pinned KaTeX stylesheet, library and fonts and the page script that
+    renders the TeX render_katex.py leaves in each page; mdBook copies them into the book."""
+    try:
+        assets = katex_assets()
+    except RenderError as exc:
+        raise BuildError(str(exc)) from exc
+    for name, source in assets.items():
+        destination = staging / KATEX_DIRECTORY / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+
+
 def write_projection(
     staging: Path,
     entries: list[SourceEntry],
@@ -759,6 +774,8 @@ def write_projection(
             build_nav_page(directory, directories, entries, titles, sha, labels[directory]),
             encoding="utf-8",
         )
+
+    write_katex_assets(staging)
 
     provenance: dict[str, object] = {
         "upstream_sha": sha,
