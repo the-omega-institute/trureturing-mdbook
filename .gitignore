@@ -45,6 +45,7 @@
 !/tests/test_render_katex.py
 !/tests/test_search_titles.py
 !/tests/search_titles.test.cjs
+!/tests/katex_page.test.cjs
 !/.github/
 /.github/*
 !/.github/workflows/

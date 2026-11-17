@@ -26,6 +26,9 @@ upstream source on GitHub, and deploys only after the source
 set, page mapping, math output, relative links and artifact size all pass their gates.
 mdBook's single-page print view is disabled: it repeats every chapter in one file of about
 350 MB that no browser opens, and with it the artifact exceeded GitHub Pages' 1 GB limit.
+For the same limit, formulas ship as TeX and are rendered in the reader's browser:
+pre-rendered KaTeX HTML averaged 2.9 KB per formula and had grown to more than half of a
+1,026 MB artifact.
 
 A defect in one upstream page does not keep the site from publishing. What can be repaired is:
 a formula using a common package macro, Markdown-escaped backslashes or a macro defined only
@@ -102,20 +105,36 @@ a run of prose between two rules. The prose preprocessor folds it, in memory, in
 "Metadata" block holding the YAML verbatim as code; the formula scanner treats it as metadata,
 never math, for both the renderer and the release gate.
 
-Formulas are rendered by `scripts/render_katex.py`, an mdBook preprocessor that finds every
+Formulas are handled by `scripts/render_katex.py`, an mdBook preprocessor that finds every
 `$…$`, ``$`…`$`` and `$$…$$` span with the same scanner the verifier counts with (`scripts/math_scan.py`)
-and renders them all in one Node process with the KaTeX package pinned in `package-lock.json`.
-The process writes one JSON line per formula as it goes; holding the book's ~400 MB of KaTeX
-HTML in one array ran Node out of memory.
+and renders them all once, in one Node process, with the KaTeX package pinned in
+`package-lock.json`. That build-time render decides each formula's fate; the page receives
+not KaTeX's HTML but the formula's TeX, in a `<span class="katex-source">`. A page with one
+loads KaTeX's stylesheet, `katex.min.js` and `katex-page.js` from the site's own `katex/`
+directory, which `scripts/build-site.py` copies from the pinned package together with its
+fonts and license. `katex-page.js` (`scripts/katex_page.js`) renders every span in one pass
+as the page loads, with the macros and options the build rendered with — Node loads the
+same file — so a formula that rendered in the build renders the same in the browser. The
+largest page, 6,165 formulas, takes about a second; without JavaScript the TeX stays visible.
 It replaced mdbook-katex, whose embedded QuickJS runtime has a 256 KiB stack: a theorem page
 with a few hundred nested `\left…\right` groups made it keep the source text, which the
 release gate then refused. Commands from LaTeX packages that upstream quotes use and KaTeX
 lacks (`\Tr`, `\tr`, `\mathds`, `\Tilde`, `\ketbra`, `\floor`, `\norm`, `\mbox`, …) are
-defined in `scripts/katex_render.js`. A formula that still fails is retried with
-Markdown-escaped backslashes undone (`\\mathcal` for `\mathcal`), and one whose only problem is
-a macro defined in the quoted paper (`\qc`, `\scrT`) is rendered in KaTeX's lenient mode, which
-shows that command's name in red; the log reports how many. A formula KaTeX still cannot
-render is shown as its source, with a warning naming the page.
+defined in `scripts/katex_page.js`. A formula that still fails is retried with
+Markdown-escaped backslashes undone (`\\mathcal` for `\mathcal`), and the page gets the TeX
+that rendered; one whose only problem is a macro defined in the quoted paper (`\qc`, `\scrT`)
+is marked for KaTeX's lenient mode, which shows that command's name in red; the log reports
+how many. A formula KaTeX still cannot render is shown as its source, with a warning naming
+the page.
+
+The TeX passes through Markdown with every ASCII punctuation character and line break
+written as a character reference, which Markdown decodes but never parses, so the page holds
+the formula exactly (a `%` comment still ends at its line). The release gate holds it to
+that: on every page it counts the source and fallback elements against the formulas in the
+Markdown, checks that each element's text is its formula's TeX (no quote turned curly, no
+`*` taken for emphasis, no `|` taken for a table cell), that every page with math loads the
+three assets, and that `katex/` holds exactly the pinned package's files and the page script,
+byte for byte.
 
 Before rendering, the prose preprocessor escapes link-shaped mathematical notation such as
 `mu_H[d](univ)` and standalone powered coefficient expressions such as

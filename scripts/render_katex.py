@@ -56,13 +56,14 @@ class RenderError(RuntimeError):
 
 def katex_assets() -> dict[str, Path]:
     """Each file published under ``ASSET_DIRECTORY``, mapped to its source: the pinned
-    package's stylesheet, library and fonts (the stylesheet names them), and the page
-    script."""
+    package's stylesheet, library and fonts (the stylesheet names them), its MIT license
+    (the minified files carry no notice), and the page script."""
     if not (KATEX_DIST / LIBRARY).is_file():
         raise RenderError("the pinned katex package is not installed; run `npm ci` in the repository root")
     assets = {
         STYLESHEET: KATEX_DIST / STYLESHEET,
         LIBRARY: KATEX_DIST / LIBRARY,
+        "LICENSE": KATEX_DIST.parent / "LICENSE",
         PAGE_SCRIPT: PAGE_SCRIPT_SOURCE,
     }
     for font in sorted((KATEX_DIST / "fonts").iterdir()):

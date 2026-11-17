@@ -11,7 +11,6 @@
 "use strict";
 
 const fs = require("fs");
-const { katexOptions } = require("./katex_page.js");
 
 let katex;
 try {
@@ -23,6 +22,7 @@ try {
   }
   throw error;
 }
+const { katexOptions } = require("./katex_page.js");
 
 function render(tex, display, lenient) {
   return katex.renderToString(tex, katexOptions(display, lenient));

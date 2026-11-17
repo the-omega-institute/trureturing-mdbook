@@ -16,7 +16,7 @@ The upstream repository currently provides an [Apache-2.0 LICENSE](https://githu
 
 ## Third-party generated assets
 
-Rendered pages may contain KaTeX assets. KaTeX is distributed under the MIT License; its copyright and license notice remain those of the KaTeX project:
+The built site's `katex/` directory holds KaTeX's stylesheet, library and fonts, copied unmodified from the pinned npm package, with KaTeX's license as `katex/LICENSE`; pages with math load them. KaTeX is distributed under the MIT License; its copyright and license notice remain those of the KaTeX project:
 
 https://github.com/KaTeX/KaTeX
 

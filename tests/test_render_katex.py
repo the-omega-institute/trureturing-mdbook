@@ -115,7 +115,18 @@ class RenderKatexTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, code)
 
-    def test_renders_each_formula_once_and_leaves_text_and_code_alone(self) -> None:
+    def sources(self, content: str) -> list[tuple[str, bool, bool]]:
+        """(decoded TeX, display, lenient) of each source element, in order."""
+        import html, re
+        return [
+            (html.unescape(text), bool(display), bool(lenient))
+            for display, lenient, text in re.findall(
+                r'<span class="katex-source"( data-display="true")?( data-lenient="true")?>([^<]*)</span>',
+                content,
+            )
+        ]
+
+    def test_leaves_each_formula_as_source_and_leaves_text_and_code_alone(self) -> None:
         content = (
             "Inline $x^2$ then display\n\n$$\\sum_{i=1}^n i$$\n\n"
             "`code $k$` and\n```\n$fenced$\n```\nand \\$5 stays.\n"
@@ -124,36 +135,68 @@ class RenderKatexTests(unittest.TestCase):
         for name in ("page", "page/sub"):
             with self.subTest(name=name):
                 rendered = out[name]
-                self.assertTrue(rendered.startswith(render_katex.STYLESHEET_HEADER))
-                self.assertEqual(rendered.count('class="katex"'), 2)
-                self.assertEqual(rendered.count('class="katex-display"'), 1)
+                self.assertTrue(rendered.startswith(render_katex.asset_header(None)))
+                self.assertEqual(self.sources(rendered),
+                                 [("x^2", False, False), ("\\sum_{i=1}^n i", True, False)])
                 self.assertNotIn("$$", rendered)
                 self.assertIn("`code $k$`", rendered)
                 self.assertIn("$fenced$", rendered)
                 self.assertIn("\\$5 stays.", rendered)
-                # Rendered HTML is one line, so a blank line never splits the HTML block.
-                for fragment in rendered.split("<span class=\"katex\">")[1:]:
-                    self.assertNotIn("\n\n", fragment.split("</span></span>")[0])
+                # Each element is one line, so a blank line never splits the HTML block.
+                for element in rendered.split('<span class="katex-source"')[1:]:
+                    self.assertNotIn("\n", element.split("</span>")[0])
 
-    def test_deep_nesting_that_overflowed_the_quickjs_stack_renders(self) -> None:
+    def test_source_text_is_inert_markdown_and_keeps_line_breaks(self) -> None:
+        import html, re
+        tex = "f'(x) = \"a\" -- b ... |x| *e* _f_ [a](b) <c> & \\% d \\\\ % comment\r\n  + e\tg"
+        element = render_katex.source_html(tex, True, True)
+        match = re.fullmatch(
+            r'<span class="katex-source" data-display="true" data-lenient="true">([^<]*)</span>', element
+        )
+        self.assertIsNotNone(match)
+        text = match.group(1)
+        # Markdown runs after the preprocessor: no raw ASCII punctuation or line break reaches it.
+        self.assertRegex(text, r"^[^\x00-\x1f\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]*(&#[0-9]+;[^\x00-\x1f\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]*)*$")
+        # A % comment still ends at its line once the browser decodes the text.
+        self.assertEqual(html.unescape(text), tex.replace("\r\n", "\n"))
+
+    def test_asset_header_is_relative_to_the_chapter(self) -> None:
+        for path, root in ((None, ""), ("index.md", ""), ("_nav/x.md", "../"),
+                           ("Blueprint/D5/S3/Page.md", "../../../")):
+            with self.subTest(path=path):
+                header = render_katex.asset_header(path)
+                self.assertEqual(header, (
+                    f'<link rel="stylesheet" href="{root}katex/katex.min.css">\n'
+                    f'<script defer src="{root}katex/katex.min.js"></script>\n'
+                    f'<script defer src="{root}katex/katex-page.js"></script>\n\n'
+                ))
+
+    def test_deep_nesting_that_overflowed_the_quickjs_stack_is_checked_and_kept(self) -> None:
         depth = 400
-        formula = "$$" + "\\left(" * depth + "x" + "\\right)" * depth + "$$"
-        out = self.render({"deep": formula + "\n"})
-        self.assertEqual(out["deep"].count('class="katex-display"'), 1)
-        self.assertNotIn("$$", out["deep"])
+        tex = "\\left(" * depth + "x" + "\\right)" * depth
+        out = self.render({"deep": "$$" + tex + "$$\n"})
+        self.assertEqual(self.sources(out["deep"]), [(tex, True, False)])
+        self.assertNotIn("katex-fallback", out["deep"])
 
-    def test_renders_github_inline_math_as_two_real_katex_nodes(self) -> None:
+    def test_github_inline_math_becomes_two_source_elements(self) -> None:
         content = "$`X_i=\\theta_i+\\epsilon_i`$，其中 $`\\epsilon_i\\sim N(0,1)`$。\n"
         rendered = self.render({"Library/Dynamics/abraham2024sharp.md": content})[
             "Library/Dynamics/abraham2024sharp.md"]
-        self.assertEqual(rendered.count('class="katex"'), 2)
+        self.assertEqual(self.sources(rendered), [
+            ("X_i=\\theta_i+\\epsilon_i", False, False), ("\\epsilon_i\\sim N(0,1)", False, False),
+        ])
         self.assertIn("，其中 ", rendered)
         self.assertNotIn("$`", rendered)
         self.assertNotIn("`$", rendered)
 
-    def test_chapters_without_math_are_unchanged_except_the_stylesheet(self) -> None:
+    def test_chapters_without_math_are_unchanged(self) -> None:
         out = self.render({"plain": "# Title\n\nNo math here.\n"})
-        self.assertEqual(out["plain"], render_katex.STYLESHEET_HEADER + "# Title\n\nNo math here.\n")
+        self.assertEqual(out["plain"], "# Title\n\nNo math here.\n")
+
+    def test_a_chapter_with_only_fallbacks_loads_no_katex_assets(self) -> None:
+        content, _stderr = self.run_chapter("bad $\\frac{x}{$\n")
+        self.assertIn("katex-fallback", content)
+        self.assertNotIn("katex/", content)
 
     def test_katex_parse_errors_fall_back_to_escaped_source_and_warn(self) -> None:
         import html, re
@@ -168,14 +211,15 @@ class RenderKatexTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         content = json.loads(result.stdout)["items"][0]["Chapter"]["content"]
-        self.assertEqual(content.count('class="katex"'), 1)
+        self.assertTrue(content.startswith(render_katex.asset_header("Blueprint/Bad.md")))
+        self.assertEqual(self.sources(content), [("x", False, False)])
         fallbacks = re.findall(r'<code class="katex-fallback"( data-display="true")?>([^<]*)</code>', content)
         self.assertEqual([html.unescape(text) for _, text in fallbacks], sources)
         self.assertEqual([bool(display) for display, _ in fallbacks], [False, True])
         # Markdown runs after the preprocessor: no raw ASCII punctuation may reach it.
         for _, text in fallbacks:
             self.assertRegex(text, r"^[^\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]*(&#[0-9]+;[^\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]*)*$")
-        self.assertNotIn("$", content.replace(render_katex.STYLESHEET_HEADER, ""))
+        self.assertNotIn("$", content)
         warnings = [line for line in result.stderr.splitlines() if line.startswith("::warning ")]
         self.assertEqual(len(warnings), 2)
         self.assertIn("Blueprint/Bad.md: formula 1:", warnings[0])
@@ -201,17 +245,21 @@ class RenderKatexTests(unittest.TestCase):
                     "\\Tilde{x} + \\mbox{if } \\norm{v}", "\\\\mathcal{Q}^+_\\\\alpha",
                     "\\begin{bmatrix} A &X \\\\\\\\ X^* &B \\end{bmatrix}"]
         content, stderr = self.run_chapter("".join(f"${formula}$\n" for formula in formulas))
-        self.assertEqual(content.count('class="katex"'), len(formulas))
+        # The page gets the TeX that rendered: the escaping undone where only that renders.
+        self.assertEqual([tex for tex, _, _ in self.sources(content)], [
+            "\\Tr(\\rho) = \\tr \\rho", "\\ketbra{0}{1} + \\floor{x} + \\mathds{1}",
+            "\\Tilde{x} + \\mbox{if } \\norm{v}", "\\mathcal{Q}^+_\\alpha",
+            "\\begin{bmatrix} A &X \\\\\\\\ X^* &B \\end{bmatrix}",
+        ])
         self.assertNotIn("katex-fallback", content)
+        self.assertNotIn("data-lenient", content)
         self.assertNotIn("::warning", stderr)
-        self.assertNotIn("#cc0000", content)
 
-    def test_paper_local_macros_render_around_their_name_in_red(self) -> None:
+    def test_paper_local_macros_are_marked_lenient(self) -> None:
         content, stderr = self.run_chapter("$\\qc(x) + \\scrT_1$ and $y$\n")
-        self.assertEqual(content.count('class="katex"'), 2)
+        self.assertEqual(self.sources(content),
+                         [("\\qc(x) + \\scrT_1", False, True), ("y", False, False)])
         self.assertNotIn("katex-fallback", content)
-        self.assertIn("#cc0000", content)
-        self.assertIn("qc", content)
         self.assertNotIn("::warning", stderr)
         self.assertIn("render-katex: 1 formulas show an undefined macro's name in red", stderr)
 
@@ -229,7 +277,7 @@ class RenderKatexTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         content = json.loads(result.stdout)["items"][0]["Chapter"]["content"]
-        self.assertEqual(content.count('class="katex"'), 1)
+        self.assertEqual(self.sources(content), [("x", False, False)])
         self.assertEqual(content.count('class="katex-fallback"'), 1)
         warnings = [line for line in result.stderr.splitlines() if line.startswith("::warning ")]
         self.assertEqual(len(warnings), 1)
@@ -246,21 +294,37 @@ class RenderKatexTests(unittest.TestCase):
     def test_missing_package_is_reported_as_an_install_step_not_a_render_error(self) -> None:
         import shutil, tempfile
         with tempfile.TemporaryDirectory() as temporary:
-            script = Path(temporary) / "katex_render.js"
-            shutil.copyfile(ROOT / "scripts" / "katex_render.js", script)
+            for name in ("katex_render.js", "katex_page.js"):
+                shutil.copyfile(ROOT / "scripts" / name, Path(temporary) / name)
             result = subprocess.run(
-                ["node", str(script)], input='[{"tex": "x", "display": false}]',
+                ["node", str(Path(temporary) / "katex_render.js")],
+                input='[{"tex": "x", "display": false}]',
                 capture_output=True, text=True, cwd=temporary,
             )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("npm ci", result.stderr)
 
-    def test_pinned_katex_version_matches_the_stylesheet(self) -> None:
+    def test_pinned_katex_package_supplies_the_published_assets(self) -> None:
         version = json.loads(NODE_MODULES.read_text(encoding="utf-8"))["version"]
-        self.assertIn(f"katex@{version}/dist/katex.min.css", render_katex.STYLESHEET_HEADER)
+        self.assertEqual(version, render_katex.KATEX_VERSION)
         lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
         self.assertEqual(lock["packages"]["node_modules/katex"]["version"], version)
         self.assertTrue(lock["packages"]["node_modules/katex"]["integrity"].startswith("sha512-"))
+        assets = render_katex.katex_assets()
+        dist = ROOT / "node_modules" / "katex" / "dist"
+        self.assertEqual(assets["katex.min.js"], dist / "katex.min.js")
+        self.assertEqual(assets["katex.min.css"], dist / "katex.min.css")
+        self.assertEqual(assets["katex-page.js"], ROOT / "scripts" / "katex_page.js")
+        self.assertIn("MIT License", assets["LICENSE"].read_text(encoding="utf-8"))
+        # Every font the stylesheet names is published next to it.
+        import re
+        stylesheet = (dist / "katex.min.css").read_text(encoding="utf-8")
+        named = set(re.findall(r"url\((fonts/[^)]+)\)", stylesheet))
+        self.assertTrue(named)
+        self.assertLessEqual(named, set(assets))
+
+    def test_page_script_contract_under_node(self) -> None:
+        subprocess.run(["node", "--test", str(ROOT / "tests/katex_page.test.cjs")], check=True, cwd=ROOT)
 
 
 if __name__ == "__main__":
